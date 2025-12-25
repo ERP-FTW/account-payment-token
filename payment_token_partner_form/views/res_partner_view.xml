@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_partner_form_add_internal_tokenize_button" model="ir.ui.view">
+        <field name="name">res.partner.form.add.internal.tokenize.button</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_open_internal_tokenize_wizard"
+                        type="object"
+                        string="Add Card"
+                        icon="fa-credit-card"
+                        class="oe_stat_button"
+                        groups="base.group_user"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

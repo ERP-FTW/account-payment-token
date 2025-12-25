@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_partner_internal_tokenize_wizard_form" model="ir.ui.view">
+        <field name="name">partner.internal.tokenize.wizard.form</field>
+        <field name="model">partner.internal.tokenize.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Add Card on File (Tokenize)">
+                <sheet>
+                    <group>
+                        <field name="partner_id" readonly="1"/>
+                        <field name="company_id"/>
+                    </group>
+
+                    <div class="alert alert-info mt16">
+                        This opens the provider's secure tokenization form.
+                        Do not type card data into Odoo fields—use the hosted form.
+                    </div>
+                </sheet>
+                <footer>
+                    <button name="action_open_tokenization_page" type="object" class="btn-primary"
+                            string="Open Tokenization Form"/>
+                    <button special="cancel" string="Cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>
