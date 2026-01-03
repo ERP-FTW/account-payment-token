@@ -1,209 +1,132 @@
+# -*- coding: utf-8 -*-
 import logging
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
-from odoo import Command
 
 _logger = logging.getLogger(__name__)
 
 
 class AccountInvoiceTokenWizard(models.TransientModel):
-    _name = "account.invoice.token.wizard"
-    _description = "Charge Invoice with Saved Payment Token"
+    _name = 'account.invoice.token.wizard'
+    _description = 'Charge Invoice with Saved Payment Token'
 
-    invoice_id = fields.Many2one(
-        "account.move",
-        string="Invoice",
-        required=True,
-        readonly=True,
-        domain=[("move_type", "=", "out_invoice")],
-    )
-    partner_id = fields.Many2one(
-        "res.partner",
-        string="Customer",
-        related="invoice_id.partner_id",
-        store=False,
-        readonly=True,
-    )
-    company_id = fields.Many2one(
-        "res.company",
-        string="Company",
-        related="invoice_id.company_id",
-        store=False,
-        readonly=True,
-    )
-    currency_id = fields.Many2one(
-        "res.currency",
-        string="Currency",
-        related="invoice_id.currency_id",
-        store=False,
-        readonly=True,
-    )
-    amount = fields.Monetary(
-        string="Amount to Charge",
-        required=True,
-        currency_field="currency_id",
-    )
-    token_id = fields.Many2one(
-        "payment.token",
-        string="Payment Method (Token)",
-        required=True,
-        domain="[('partner_id', '=', partner_id), ('company_id', 'in', (company_id, False))]",
-    )
+    invoice_id = fields.Many2one('account.move', string='Invoice', required=True, readonly=True)
+    partner_id = fields.Many2one('res.partner', string='Customer', required=True, readonly=True)
+    company_id = fields.Many2one('res.company', string='Company', required=True, readonly=True)
+    currency_id = fields.Many2one('res.currency', string='Currency', required=True, readonly=True)
+
+    token_id = fields.Many2one('payment.token', string='Saved Payment Method', required=True,
+                              domain="[('partner_id', '=', partner_id)]")
+
+    amount = fields.Monetary(string='Amount to Charge', currency_field='currency_id', required=True)
+    reference = fields.Char(string='Reference', help='Optional override; defaults to invoice name.')
 
     @api.model
     def default_get(self, fields_list):
         res = super().default_get(fields_list)
-        invoice_id = self.env.context.get("default_invoice_id")
-        if invoice_id:
-            invoice = self.env["account.move"].browse(invoice_id).exists()
-            if invoice and "amount" in fields_list:
-                res.setdefault("amount", invoice.amount_residual)
+        active_id = self.env.context.get('active_id')
+        if active_id and 'invoice_id' in fields_list:
+            invoice = self.env['account.move'].browse(active_id)
+            res.update({
+                'invoice_id': invoice.id,
+                'partner_id': invoice.partner_id.id,
+                'company_id': invoice.company_id.id,
+                'currency_id': invoice.currency_id.id,
+                'amount': invoice.amount_residual,
+            })
         return res
 
-    def _check_preconditions(self):
-        """Basic sanity checks before attempting a charge.
-
-        Keep this small and readable; we'll extend it later if needed.
-        """
+    def action_charge(self):
         self.ensure_one()
-        invoice = self.invoice_id
-        if not invoice:
-            raise UserError(_("No invoice selected."))
 
-        if invoice.state != "posted":
-            raise UserError(_("Only posted invoices can be charged."))
+        invoice = self.invoice_id.sudo()
+        token = self.token_id.sudo()
 
-        if invoice.move_type != "out_invoice":
-            raise UserError(_("Only customer invoices can be charged with a token."))
+        if invoice.state != 'posted':
+            raise UserError(_("The invoice must be posted before it can be charged."))
 
-        if invoice.amount_residual <= 0:
-            raise UserError(_("The invoice has no outstanding amount to charge."))
+        if invoice.move_type not in ('out_invoice', 'out_refund'):
+            raise UserError(_("Only customer invoices/credit notes can be charged."))
+
+        if token.partner_id.id != invoice.partner_id.id:
+            raise UserError(_("The selected token does not belong to this customer."))
 
         if self.amount <= 0:
-            raise UserError(_("The amount to charge must be strictly positive."))
+            raise UserError(_("Amount must be greater than 0."))
 
-        # Don't allow charging more than residual, with a tiny tolerance
-        if self.amount - invoice.amount_residual > 1e-6:
-            msg = _(
-                "You cannot charge more than the remaining amount on the invoice.\n"
-                "Amount to charge: %(charge).2f, Residual: %(residual).2f"
-            ) % {"charge": self.amount, "residual": invoice.amount_residual}
-            raise UserError(msg)
+        if self.amount > invoice.amount_residual + 0.00001:
+            raise UserError(_("You cannot charge more than the remaining amount due."))
 
-        if not self.token_id:
-            raise UserError(_("Please select a saved payment method (token)."))
-
-        if self.token_id.partner_id != invoice.partner_id.commercial_partner_id:
-            raise UserError(
-                _(
-                    "The selected token belongs to a different customer than the invoice."
-                )
-            )
-
-    def action_charge_with_token(self):
-        """Create a payment.transaction and send a token payment request.
-
-        We rely entirely on the standard payment framework and provider
-        implementation. This wizard only wires the invoice + token into it,
-        and logs everything for traceability.
-        """
-        self.ensure_one()
-        self._check_preconditions()
-
-        invoice = self.invoice_id
-        token = self.token_id
-        provider = token.provider_id
-
+        provider = getattr(token, 'provider_id', False) or getattr(token, 'acquirer_id', False)
         if not provider:
-            raise UserError(_("The selected token is not linked to a payment provider."))
+            raise UserError(_("The selected token is missing its provider/acquirer."))
 
-        # NEW: Odoo 18 requires payment_method_id on payment.transaction
-        payment_method = token.payment_method_id
-        if not payment_method:
-            raise UserError(_(
-                "The selected token has no Payment Method set, so Odoo cannot create a transaction.\n"
-                "Recreate the token via an online payment flow with 'Save payment method'."
-            ))
+        reference = self.reference or invoice.name or invoice.ref or f"INV-{invoice.id}"
 
-        # Log intent before creating the transaction
         _logger.info(
-            "Attempting backend token charge for invoice %s (id=%s) using token %s (id=%s) "
-            "via provider %s (id=%s), payment_method=%s (id=%s) for amount %s %s",
-            invoice.display_name,
-            invoice.id,
-            token.display_name,
-            token.id,
-            provider.display_name,
-            provider.id,
-            payment_method.display_name,
-            payment_method.id,
-            self.amount,
-            invoice.currency_id.name,
+            "[payment_token_invoice] Charging invoice=%s (%s) partner=%s token=%s provider=%s amount=%s %s",
+            invoice.id, invoice.name, invoice.partner_id.id, token.id, provider.id, self.amount, invoice.currency_id.name,
         )
 
-        invoice.message_post(
-            body=_(
-                "Attempting token charge of %(amount).2f %(currency)s using saved payment method "
-                "'%(token)s' (provider: %(provider)s, payment method: %(pm)s)."
-            )
-                 % {
-                     "amount": self.amount,
-                     "currency": invoice.currency_id.name,
-                     "token": token.display_name,
-                     "provider": provider.display_name,
-                     "pm": payment_method.display_name,
-                 }
-        )
-
+        Tx = self.env['payment.transaction'].sudo()
         tx_vals = {
-            "provider_id": provider.id,
-            "payment_method_id": payment_method.id,  # <-- NEW (required)
-            "token_id": token.id,
-            "partner_id": invoice.partner_id.commercial_partner_id.id,
-            "amount": self.amount,
-            "currency_id": invoice.currency_id.id,
-            "operation": "online_token",
-            "invoice_ids": [Command.set([invoice.id])],
-            "company_id": invoice.company_id.id,
+            'reference': reference,
+            'amount': float(self.amount),
+            'currency_id': invoice.currency_id.id,
+            'partner_id': invoice.partner_id.id,
+            'token_id': token.id,
+            'operation': 'online_direct',
+            'is_validation': False,
+            # company_id exists on tx in some versions; set if present
         }
 
-        tx = self.env["payment.transaction"].create(tx_vals)
+        # Provider/acquirer field name differs depending on version
+        if 'provider_id' in Tx._fields:
+            tx_vals['provider_id'] = provider.id
+        elif 'acquirer_id' in Tx._fields:
+            tx_vals['acquirer_id'] = provider.id
 
-        # We log the transaction reference early for easier tracing
-        _logger.info(
-            "Created payment.transaction %s (id=%s) for invoice %s (id=%s)",
-            tx.reference,
-            tx.id,
-            invoice.display_name,
-            invoice.id,
-        )
+        # Some versions require payment_method_id for direct operations
+        if 'payment_method_id' in Tx._fields:
+            payment_method = getattr(token, 'payment_method_id', False) or getattr(provider, 'payment_method_id', False)
+            if payment_method:
+                tx_vals['payment_method_id'] = payment_method.id
 
-        invoice.message_post(
-            body=_(
-                "Created payment transaction %(tx)s (ID: %(tx_id)s) for backend token charge."
-            )
-                 % {"tx": tx.reference, "tx_id": tx.id}
-        )
+        if 'company_id' in Tx._fields:
+            tx_vals['company_id'] = invoice.company_id.id
 
-        # Request provider to perform the token payment.
-        tx._send_payment_request()
+        # Link to invoice when field exists
+        if 'invoice_ids' in Tx._fields:
+            tx_vals['invoice_ids'] = [(6, 0, [invoice.id])]
+        elif 'invoice_id' in Tx._fields:
+            tx_vals['invoice_id'] = invoice.id
 
-        # Provider may update state sync/async; we record current state for visibility
-        invoice.message_post(
-            body=_(
-                "Sent payment request for transaction %(tx)s. Current state: %(state)s."
-            )
-                 % {"tx": tx.reference, "state": tx.state}
-        )
+        tx = Tx.create(tx_vals)
 
-        _logger.info(
-            "Sent payment request for transaction %s (id=%s); state=%s",
-            tx.reference,
-            tx.id,
-            tx.state,
-        )
+        # Also link from invoice side if supported
+        if 'transaction_ids' in invoice._fields:
+            try:
+                invoice.write({'transaction_ids': [(4, tx.id)]})
+            except Exception:
+                _logger.exception("[payment_token_invoice] Failed to link tx to invoice.transaction_ids")
 
-        # Close wizard and return to invoice
-        action = invoice.action_view_invoice() if hasattr(invoice, "action_view_invoice") else None
-        return action or {"type": "ir.actions.act_window_close"}
+        _logger.info("[payment_token_invoice] Created transaction %s ref=%s", tx.id, tx.reference)
+
+        try:
+            tx._send_payment_request()
+        except Exception as e:
+            _logger.exception("[payment_token_invoice] _send_payment_request failed for tx %s", tx.id)
+            raise UserError(_("Payment processing failed: %s") % (str(e),))
+
+        # Refresh
+        tx.flush_recordset()
+        tx.invalidate_recordset()
+
+        _logger.info("[payment_token_invoice] Transaction %s state=%s", tx.id, tx.state)
+
+        if tx.state not in ('done', 'authorized', 'pending'):
+            raise UserError(_("Payment processing failed (state: %s).") % (tx.state,))
+
+        # If done, invoice may auto-reconcile depending on provider/journal setup.
+        return {'type': 'ir.actions.act_window_close'}
