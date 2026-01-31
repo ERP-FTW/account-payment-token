@@ -47,11 +47,12 @@ class InternalTokenizeController(http.Controller):
         availability_report = {}
 
         # Equivalent to /my/payment_method logic but for chosen partner.
-        provider_model_name = (
-            "payment.provider"
-            if "payment.provider" in request.env.registry._models
-            else "payment.acquirer"
-        )
+        try:
+            request.env["payment.provider"]
+        except KeyError:
+            provider_model_name = "payment.acquirer"
+        else:
+            provider_model_name = "payment.provider"
         provider_model = request.env[provider_model_name].sudo().with_company(company_sudo)
         if hasattr(provider_model, "_get_compatible_providers"):
             providers_sudo = provider_model._get_compatible_providers(
@@ -74,7 +75,11 @@ class InternalTokenizeController(http.Controller):
                 **kwargs,
             )
 
-        if "payment.method" in request.env.registry._models:
+        try:
+            request.env["payment.method"]
+        except KeyError:
+            payment_methods_sudo = request.env["payment.token"].sudo().browse()
+        else:
             payment_methods_sudo = (
                 request.env["payment.method"]
                 .sudo()
@@ -85,8 +90,6 @@ class InternalTokenizeController(http.Controller):
                     report=availability_report,
                 )
             )
-        else:
-            payment_methods_sudo = request.env["payment.token"].sudo().browse()
         tokens_sudo = request.env["payment.token"].sudo()._get_available_tokens(
             None, partner_sudo.id, is_validation=True
         )
