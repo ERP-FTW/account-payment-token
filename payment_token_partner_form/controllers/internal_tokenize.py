@@ -57,6 +57,11 @@ class InternalTokenizeController(http.Controller):
         amount = 0.0
         compat_kwargs = dict(kwargs)
         compat_kwargs.setdefault("currency_id", company_sudo.currency_id.id)
+        _logger.info(
+            "[partner_internal_payment_tokenize] Using provider model %s with currency_id=%s",
+            provider_model_name,
+            compat_kwargs.get("currency_id"),
+        )
         if hasattr(provider_model, "_get_compatible_providers"):
             try:
                 providers_sudo = provider_model._get_compatible_providers(
@@ -107,11 +112,24 @@ class InternalTokenizeController(http.Controller):
             if "allow_tokenization" in provider_model._fields:
                 provider_domain.append(("allow_tokenization", "=", True))
             providers_sudo = provider_model.search(provider_domain)
+            _logger.info(
+                "[partner_internal_payment_tokenize] Fallback provider domain %s -> %s providers",
+                provider_domain,
+                len(providers_sudo),
+            )
+        else:
+            _logger.info(
+                "[partner_internal_payment_tokenize] Compatible providers found: %s",
+                providers_sudo.ids,
+            )
 
         try:
             request.env["payment.method"]
         except KeyError:
             payment_methods_sudo = request.env["payment.token"].sudo().browse()
+            _logger.info(
+                "[partner_internal_payment_tokenize] payment.method unavailable; using empty recordset",
+            )
         else:
             payment_methods_sudo = (
                 request.env["payment.method"]
@@ -123,12 +141,20 @@ class InternalTokenizeController(http.Controller):
                     report=availability_report,
                 )
             )
+            _logger.info(
+                "[partner_internal_payment_tokenize] Compatible payment methods: %s",
+                payment_methods_sudo.ids,
+            )
         tokens_sudo = request.env["payment.token"].sudo().search(
             [
                 ("partner_id", "=", partner_sudo.id),
                 ("company_id", "in", [company_sudo.id, False]),
                 ("active", "=", True),
             ]
+        )
+        _logger.info(
+            "[partner_internal_payment_tokenize] Tokens found: %s",
+            tokens_sudo.ids,
         )
 
         try:
@@ -171,4 +197,10 @@ class InternalTokenizeController(http.Controller):
         template = "payment.payment_methods"
         if not request.env["ir.ui.view"].sudo().search([("key", "=", template)], limit=1):
             template = "payment.payment_acquirer_list"
+        _logger.info(
+            "[partner_internal_payment_tokenize] Rendering template %s (providers=%s, tokens=%s)",
+            template,
+            providers_sudo.ids,
+            tokens_sudo.ids,
+        )
         return request.render(template, rendering_context)
