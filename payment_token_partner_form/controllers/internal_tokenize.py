@@ -197,15 +197,21 @@ class InternalTokenizeController(http.Controller):
             rendering_context["internal_access_token"] = access_token
 
         template_candidates = ["payment.payment_methods", "payment.payment_acquirer_list"]
-        template_candidates.append("payment_token_partner_form.payment_acquirer_list")
-        template = None
-        for candidate in template_candidates:
-            if request.env["ir.ui.view"].sudo().search([("key", "=", candidate)], limit=1):
-                template = candidate
-                break
+        template = next(
+            (
+                candidate
+                for candidate in template_candidates
+                if request.env["ir.ui.view"].sudo().search([("key", "=", candidate)], limit=1)
+            ),
+            None,
+        )
         if not template:
-            template = "payment_token_partner_form.payment_acquirer_list"
-        if template in {"payment.payment_acquirer_list", "payment_token_partner_form.payment_acquirer_list"}:
+            _logger.error(
+                "[partner_internal_payment_tokenize] Missing payment templates: %s",
+                template_candidates,
+            )
+            raise werkzeug.exceptions.NotFound()
+        if template == "payment.payment_acquirer_list":
             payment_context["acquirers_sudo"] = providers_sudo
         _logger.info(
             "[partner_internal_payment_tokenize] Rendering template %s (providers=%s, tokens=%s)",

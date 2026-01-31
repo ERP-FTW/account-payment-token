@@ -9,7 +9,6 @@
         "security/ir.model.access.csv",
         "views/tokenize_partner_payment_method_view.xml",
         "views/res_partner_view.xml",
-        "views/payment_token_templates.xml",
     ],
     "license": "LGPL-3",
     "installable": True,
