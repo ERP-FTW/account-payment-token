@@ -99,6 +99,7 @@ class InternalTokenizeController(http.Controller):
             tokens_sudo = token_model.search(
                 [
                     ("partner_id", "=", partner_sudo.id),
+                    ("company_id", "in", [company_sudo.id, False]),
                     ("active", "=", True),
                 ]
             )
