@@ -90,9 +90,18 @@ class InternalTokenizeController(http.Controller):
                     report=availability_report,
                 )
             )
-        tokens_sudo = request.env["payment.token"].sudo()._get_available_tokens(
-            None, partner_sudo.id, is_validation=True
-        )
+        token_model = request.env["payment.token"].sudo()
+        if hasattr(token_model, "_get_available_tokens"):
+            tokens_sudo = token_model._get_available_tokens(
+                None, partner_sudo.id, is_validation=True
+            )
+        else:
+            tokens_sudo = token_model.search(
+                [
+                    ("partner_id", "=", partner_sudo.id),
+                    ("active", "=", True),
+                ]
+            )
 
         try:
             computed_access_token = payment_utils.generate_access_token(
