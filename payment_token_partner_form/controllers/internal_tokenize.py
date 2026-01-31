@@ -54,26 +54,59 @@ class InternalTokenizeController(http.Controller):
         else:
             provider_model_name = "payment.provider"
         provider_model = request.env[provider_model_name].sudo().with_company(company_sudo)
+        amount = 0.0
+        compat_kwargs = dict(kwargs)
+        compat_kwargs.setdefault("currency_id", company_sudo.currency_id.id)
         if hasattr(provider_model, "_get_compatible_providers"):
-            providers_sudo = provider_model._get_compatible_providers(
-                company_sudo.id,
-                partner_sudo.id,
-                0.0,
-                force_tokenization=True,
-                is_validation=True,
-                report=availability_report,
-                **kwargs,
-            )
+            try:
+                providers_sudo = provider_model._get_compatible_providers(
+                    company_sudo.id,
+                    partner_sudo.id,
+                    amount,
+                    force_tokenization=True,
+                    is_validation=True,
+                    report=availability_report,
+                    **compat_kwargs,
+                )
+            except TypeError:
+                providers_sudo = provider_model._get_compatible_providers(
+                    company_sudo.id,
+                    partner_sudo.id,
+                    amount,
+                    force_tokenization=True,
+                    is_validation=True,
+                    report=availability_report,
+                    **kwargs,
+                )
         else:
-            providers_sudo = provider_model._get_compatible_acquirers(
-                company_sudo.id,
-                partner_sudo.id,
-                0.0,
-                force_tokenization=True,
-                is_validation=True,
-                report=availability_report,
-                **kwargs,
-            )
+            try:
+                providers_sudo = provider_model._get_compatible_acquirers(
+                    company_sudo.id,
+                    partner_sudo.id,
+                    amount,
+                    force_tokenization=True,
+                    is_validation=True,
+                    report=availability_report,
+                    **compat_kwargs,
+                )
+            except TypeError:
+                providers_sudo = provider_model._get_compatible_acquirers(
+                    company_sudo.id,
+                    partner_sudo.id,
+                    amount,
+                    force_tokenization=True,
+                    is_validation=True,
+                    report=availability_report,
+                    **kwargs,
+                )
+        if not providers_sudo:
+            provider_domain = [
+                ("company_id", "in", [company_sudo.id, False]),
+                ("state", "=", "enabled"),
+            ]
+            if "allow_tokenization" in provider_model._fields:
+                provider_domain.append(("allow_tokenization", "=", True))
+            providers_sudo = provider_model.search(provider_domain)
 
         try:
             request.env["payment.method"]
@@ -132,6 +165,8 @@ class InternalTokenizeController(http.Controller):
             "landing_route": landing_route,
             "access_token": computed_access_token,
         }
+        if provider_model_name == "payment.acquirer":
+            payment_context["acquirers_sudo"] = providers_sudo
 
         rendering_context = {**payment_form_values, **payment_context}
         if tx_id:
