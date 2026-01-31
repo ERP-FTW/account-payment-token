@@ -74,7 +74,6 @@ class InternalTokenizeController(http.Controller):
                 **kwargs,
             )
 
-        payment_methods_sudo = request.env["payment.method"].sudo().browse()
         if "payment.method" in request.env.registry._models:
             payment_methods_sudo = (
                 request.env["payment.method"]
@@ -86,6 +85,8 @@ class InternalTokenizeController(http.Controller):
                     report=availability_report,
                 )
             )
+        else:
+            payment_methods_sudo = request.env["payment.token"].sudo().browse()
         tokens_sudo = request.env["payment.token"].sudo()._get_available_tokens(
             None, partner_sudo.id, is_validation=True
         )
