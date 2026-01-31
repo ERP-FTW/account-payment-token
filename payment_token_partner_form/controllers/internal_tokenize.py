@@ -102,7 +102,7 @@ class InternalTokenizeController(http.Controller):
         if not providers_sudo:
             provider_domain = [
                 ("company_id", "in", [company_sudo.id, False]),
-                ("state", "=", "enabled"),
+                ("state", "in", ["enabled", "test"]),
             ]
             if "allow_tokenization" in provider_model._fields:
                 provider_domain.append(("allow_tokenization", "=", True))
