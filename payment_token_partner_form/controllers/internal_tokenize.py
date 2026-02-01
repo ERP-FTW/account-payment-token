@@ -126,13 +126,11 @@ class InternalTokenizeController(http.Controller):
         try:
             request.env["payment.method"]
         except KeyError:
-            payment_method_model_available = False
             payment_methods_sudo = request.env["payment.token"].sudo().browse()
             _logger.info(
                 "[partner_internal_payment_tokenize] payment.method unavailable; using empty recordset",
             )
         else:
-            payment_method_model_available = True
             payment_methods_sudo = (
                 request.env["payment.method"]
                 .sudo()
@@ -171,38 +169,26 @@ class InternalTokenizeController(http.Controller):
             )
         landing_route = f"/payment/internal/payment_method/{partner_sudo.id}/{company_sudo.id}"
 
-        payment_form_values = {
+        rendering_context = {
             "mode": "validation",
             "allow_token_selection": False,
             "allow_token_deletion": True,
-        }
-        payment_context = {
             "reference_prefix": payment_utils.singularize_reference_prefix(prefix="V"),
             "partner_id": partner_sudo.id,
-            "providers_sudo": providers_sudo,
+            "providers": providers_sudo,
+            "tokens": tokens_sudo,
             "payment_methods_sudo": payment_methods_sudo,
-            "tokens_sudo": tokens_sudo,
             "availability_report": availability_report,
             "transaction_route": "/payment/transaction",
             "landing_route": landing_route,
             "access_token": computed_access_token,
         }
-        if provider_model_name == "payment.acquirer":
-            payment_context["acquirers_sudo"] = providers_sudo
-
-        rendering_context = {**payment_form_values, **payment_context}
         if tx_id:
             rendering_context["internal_tx_id"] = int(tx_id)
         if access_token:
             rendering_context["internal_access_token"] = access_token
 
         template = "payment.payment_methods"
-        if not payment_method_model_available:
-            template = "payment.payment_acquirer_list"
-        if not request.env["ir.ui.view"].sudo().search([("key", "=", template)], limit=1):
-            template = "payment.payment_acquirer_list"
-        if template == "payment.payment_acquirer_list":
-            payment_context["acquirers_sudo"] = providers_sudo
         _logger.info(
             "[partner_internal_payment_tokenize] Rendering template %s (providers=%s, tokens=%s)",
             template,
