@@ -1,0 +1,13 @@
+<odoo>
+    <record id="view_pos_payment_method_form_cardpointe_poc" model="ir.ui.view">
+        <field name="name">pos.payment.method.form.cardpointe.poc</field>
+        <field name="model">pos.payment.method</field>
+        <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='use_payment_terminal']" position="after">
+                <field name="cardpointe_config_id"
+                       attrs="{'invisible': [('use_payment_terminal', '!=', 'cardpointe_poc')], 'required': [('use_payment_terminal', '=', 'cardpointe_poc')]}"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

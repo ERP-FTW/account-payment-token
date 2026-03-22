@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_pos_cardpointe_terminal_config_form_tipping" model="ir.ui.view">
+        <field name="name">pos.cardpointe.terminal.config.form.tipping</field>
+        <field name="model">pos.cardpointe.terminal.config</field>
+        <field name="inherit_id" ref="pos_cardpointe_poc.view_pos_cardpointe_terminal_config_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//group[field[@name='request_timeout_seconds']]" position="after">
+                <group string="Tip at Sale">
+                    <field name="enable_tips"/>
+                    <field name="tip_percent_1" attrs="{'invisible': [('enable_tips', '=', False)], 'required': [('enable_tips', '=', True)]}"/>
+                    <field name="tip_percent_2" attrs="{'invisible': [('enable_tips', '=', False)], 'required': [('enable_tips', '=', True)]}"/>
+                    <field name="tip_percent_3" attrs="{'invisible': [('enable_tips', '=', False)], 'required': [('enable_tips', '=', True)]}"/>
+                    <field name="tip_allow_custom" attrs="{'invisible': [('enable_tips', '=', False)]}"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>
