@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <template id="inline_form">
+        <div t-attf-id="o_cardpointe_form_{{provider_id}}" class="o_cardpointe_form">
+            <div t-if="not provider.cardpointe_tokenizer_url" class="alert alert-warning" role="alert">
+                <span>CardPointe Tokenizer URL is not configured.</span>
+            </div>
+
+            <div
+                class="o_cardpointe_iframe_wrapper"
+                t-att-data-tokenizer-url="provider.cardpointe_tokenizer_url or ''"
+                t-att-data-provider-id="provider_id"
+            >
+                <iframe
+                    class="o_cardpointe_iframe w-100"
+                    t-att-src="provider.cardpointe_tokenizer_url or ''"
+                    title="CardPointe Tokenizer"
+                    style="min-height: 520px; border: 0;"
+                />
+            </div>
+
+            <small class="text-muted">Complete card details in the secure form above.</small>
+        </div>
+    </template>
+
+</odoo>

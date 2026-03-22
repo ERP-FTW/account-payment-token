@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="payment_provider_form" model="ir.ui.view">
+        <field name="name">CardPointe Provider Form</field>
+        <field name="model">payment.provider</field>
+        <field name="inherit_id" ref="payment.payment_provider_form"/>
+        <field name="arch" type="xml">
+            <group name="provider_credentials" position="inside">
+                <group attrs="{'invisible': [('code', '!=', 'cardpointe')]}">
+                    <field name="cardpointe_merchant_config_id"/>
+                    <field name="cardpointe_test_endpoint"/>
+                    <button
+                        name="action_cardpointe_test_connection"
+                        type="object"
+                        string="Test CardPointe Connection"
+                        class="oe_highlight"
+                    />
+                </group>
+            </group>
+        </field>
+    </record>
+
+</odoo>
