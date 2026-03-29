@@ -14,8 +14,21 @@ class CardPointeTerminalConfig(models.Model):
     merchant_id = fields.Char(default='800000009875', required=True)
     merchant_config_id = fields.Many2one('cardpointe.merchant.config')
     auth_key = fields.Char(required=True)
-    device_type = fields.Selection([('clover_flex', 'Clover Flex')], default='clover_flex', required=True)
+    device_type = fields.Selection(
+        [
+            ('clover_pocket', 'Clover Pocket'),
+            ('clover_flex', 'Clover Flex'),
+            ('clover_mini', 'Clover Mini'),
+        ],
+        default='clover_pocket',
+        required=True,
+    )
     device_serial = fields.Char(string='HSN', help='Terminal hardware serial number (HSN).')
+    print_receipt_on_terminal = fields.Boolean(
+        string='Print Receipt on Terminal',
+        default=False,
+        help='Enable receipt printing on supported Clover terminals with built-in printers.',
+    )
     request_timeout_seconds = fields.Integer(default=120, required=True)
     signature_mode = fields.Selection(
         [
