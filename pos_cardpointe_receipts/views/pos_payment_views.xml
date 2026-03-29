@@ -6,6 +6,7 @@
         <field name="arch" type="xml">
             <xpath expr="//sheet" position="inside">
                 <group string="CardPointe Receipt">
+                    <field name="cardpointe_status" invisible="1"/>
                     <button name="action_cardpointe_reprint_receipt"
                             string="Reprint CardPointe Receipt"
                             type="object"
