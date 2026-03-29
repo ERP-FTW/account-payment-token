@@ -6,17 +6,18 @@
         <field name="arch" type="xml">
             <xpath expr="//sheet" position="inside">
                 <group string="CardPointe Receipt">
+                    <field name="cardpointe_is_terminal_payment" invisible="1"/>
                     <field name="cardpointe_status" invisible="1"/>
                     <button name="action_cardpointe_reprint_receipt"
                             string="Reprint CardPointe Receipt"
                             type="object"
                             class="oe_highlight"
                             groups="point_of_sale.group_pos_manager"
-                            attrs="{'invisible': ['|', ('payment_method_id.use_payment_terminal', '!=', 'cardpointe_poc'), ('cardpointe_status', '!=', 'approved')]}"/>
+                            attrs="{'invisible': ['|', ('cardpointe_is_terminal_payment', '=', False), ('cardpointe_status', '!=', 'approved')]}"/>
                 </group>
                 <group>
                 <field name="cardpointe_reprint_attempt_count" readonly="1"
-                       attrs="{'invisible': [('payment_method_id.use_payment_terminal', '!=', 'cardpointe_poc')]}"/>
+                       attrs="{'invisible': [('cardpointe_is_terminal_payment', '=', False)]}"/>
                 </group>
             </xpath>
         </field>

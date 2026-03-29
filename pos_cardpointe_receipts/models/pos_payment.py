@@ -11,6 +11,10 @@ _logger = logging.getLogger(__name__)
 class PosPayment(models.Model):
     _inherit = 'pos.payment'
 
+    cardpointe_is_terminal_payment = fields.Boolean(
+        compute='_compute_cardpointe_is_terminal_payment',
+        string='Is CardPointe Terminal Payment',
+    )
     cardpointe_reprint_attempt_count = fields.Integer(
         string='CardPointe Reprint Attempts',
         default=0,
@@ -18,10 +22,16 @@ class PosPayment(models.Model):
         copy=False,
     )
 
+    def _compute_cardpointe_is_terminal_payment(self):
+        for payment in self:
+            payment.cardpointe_is_terminal_payment = bool(
+                payment.payment_method_id
+                and payment.payment_method_id.use_payment_terminal == 'cardpointe_poc'
+            )
+
     def _is_cardpointe_terminal_payment(self):
         self.ensure_one()
-        payment_method = self.payment_method_id
-        return bool(payment_method and payment_method.use_payment_terminal == 'cardpointe_poc')
+        return bool(self.cardpointe_is_terminal_payment)
 
     def _cardpointe_reprint_precheck(self):
         self.ensure_one()
