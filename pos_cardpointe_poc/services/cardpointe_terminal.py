@@ -146,7 +146,7 @@ class CardPointeTerminalClient:
         if not result.get('ok'):
             return result
 
-        header_value = result['headers'].get('X-CardConnect-SessionKey', '')
+        header_value = result['headers'].get('X-CardConnect-SessionKey', '') or ''
         session_key = header_value.split(';', 1)[0].strip()
         if result['http_status'] != 200 or not session_key:
             return self._map_connect_error(result)
@@ -224,6 +224,14 @@ class CardPointeTerminalClient:
             'orderId': order_id,
             'includeSignature': bool(include_signature),
         }
+        receipt_requested = bool(self.config.print_receipt_on_terminal)
+        if self.config.device_type == 'clover_flex':
+            payload['printReceipt'] = receipt_requested
+        _logger.info(
+            "CardPointe authCard receipt printing requested=%s device_type=%s",
+            receipt_requested if self.config.device_type == 'clover_flex' else False,
+            self.config.device_type,
+        )
         result = self._request(
             'POST',
             '/v4/authCard',

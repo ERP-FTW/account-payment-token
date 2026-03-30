@@ -18,6 +18,8 @@
                         <field name="base_url"/>
                         <field name="merchant_id"/>
                         <field name="device_type"/>
+                        <field name="print_receipt_on_terminal"
+                               attrs="{'invisible': [('device_type', '!=', 'clover_flex')]}"/>
                         <field name="device_serial"/>
                         <field name="auth_key" password="True"/>
                         <field name="request_timeout_seconds"/>

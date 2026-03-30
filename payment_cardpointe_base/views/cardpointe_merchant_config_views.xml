@@ -44,6 +44,8 @@
 
     <menuitem id="menu_cardpointe_merchant_config"
               name="CardPointe Merchant Configs"
+              parent="account.root_payment_menu"
               action="action_cardpointe_merchant_config"
+              sequence="20"
               groups="base.group_system"/>
 </odoo>
