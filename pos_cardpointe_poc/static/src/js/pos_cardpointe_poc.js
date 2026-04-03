@@ -47,6 +47,7 @@ export class CardPointePOC extends PaymentInterface {
                     currency: this.pos.currency.name,
                     order_uid: order.uuid,
                     payment_line_uuid: line.uuid,
+                    payment_id: line.id || false,
                 },
                 { silent: true }
             );
