@@ -146,7 +146,7 @@ class CardPointeTerminalClient:
         if not result.get('ok'):
             return result
 
-        header_value = result['headers'].get('X-CardConnect-SessionKey', '')
+        header_value = result['headers'].get('X-CardConnect-SessionKey', '') or ''
         session_key = header_value.split(';', 1)[0].strip()
         if result['http_status'] != 200 or not session_key:
             return self._map_connect_error(result)
