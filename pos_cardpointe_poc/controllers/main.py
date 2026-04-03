@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import uuid
 
@@ -23,19 +24,68 @@ class PosCardPointeController(http.Controller):
     _active_requests_lock = threading.Lock()
 
     @classmethod
+    def _diag_context(cls):
+        return {
+            'pid': os.getpid(),
+            'thread_id': threading.get_ident(),
+        }
+
+    @classmethod
+    def _active_request_count(cls):
+        with cls._active_requests_lock:
+            return len(cls._active_requests)
+
+    @classmethod
     def _set_active_request(cls, request_id, values):
         with cls._active_requests_lock:
             cls._active_requests[request_id] = values
+            size = len(cls._active_requests)
+        diag = cls._diag_context()
+        _logger.info(
+            "CardPointe active_request set request_id=%s pid=%s thread_id=%s active_count=%s "
+            "config_id=%s payment_method_id=%s uid=%s order_uid=%s payment_line_uuid=%s",
+            request_id,
+            diag['pid'],
+            diag['thread_id'],
+            size,
+            values.get('config_id'),
+            values.get('payment_method_id'),
+            values.get('uid'),
+            values.get('order_uid'),
+            values.get('payment_line_uuid'),
+        )
 
     @classmethod
     def _get_active_request(cls, request_id):
         with cls._active_requests_lock:
-            return cls._active_requests.get(request_id)
+            active_request = cls._active_requests.get(request_id)
+            size = len(cls._active_requests)
+        diag = cls._diag_context()
+        _logger.info(
+            "CardPointe active_request get request_id=%s found=%s pid=%s thread_id=%s active_count=%s",
+            request_id,
+            bool(active_request),
+            diag['pid'],
+            diag['thread_id'],
+            size,
+        )
+        return active_request
 
     @classmethod
     def _pop_active_request(cls, request_id):
         with cls._active_requests_lock:
-            return cls._active_requests.pop(request_id, None)
+            active_request = cls._active_requests.pop(request_id, None)
+            size = len(cls._active_requests)
+        diag = cls._diag_context()
+        _logger.info(
+            "CardPointe active_request pop request_id=%s found=%s pid=%s thread_id=%s active_count=%s",
+            request_id,
+            bool(active_request),
+            diag['pid'],
+            diag['thread_id'],
+            size,
+        )
+        return active_request
 
     def _validate_start_payload(self, pos_config_id, payment_method_id):
         pos_config = request.env['pos.config'].browse(int(pos_config_id)).exists()
@@ -96,8 +146,10 @@ class PosCardPointeController(http.Controller):
 
     @http.route('/pos_cardpointe_poc/start', type='json', auth='user')
     def start(self, pos_config_id, payment_method_id, amount, currency, order_uid, payment_line_uuid):
+        diag = self._diag_context()
         _logger.info(
-            "CardPointe start user=%s pos_config_id=%s payment_method_id=%s amount=%s currency=%s order_uid=%s line=%s",
+            "CardPointe start user=%s pos_config_id=%s payment_method_id=%s amount=%s currency=%s "
+            "order_uid=%s line=%s pid=%s thread_id=%s active_count=%s",
             request.env.user.id,
             pos_config_id,
             payment_method_id,
@@ -105,6 +157,9 @@ class PosCardPointeController(http.Controller):
             currency,
             order_uid,
             payment_line_uuid,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
         )
 
         _payment_method, config, error = self._validate_start_payload(pos_config_id, payment_method_id)
@@ -137,11 +192,16 @@ class PosCardPointeController(http.Controller):
                 'amount': amount,
             },
         )
+        diag = self._diag_context()
         _logger.info(
-            "CardPointe terminal session established request_id=%s payment_method_id=%s order_uid=%s",
+            "CardPointe terminal session established request_id=%s payment_method_id=%s order_uid=%s "
+            "pid=%s thread_id=%s active_count=%s",
             request_id,
             payment_method_id,
             order_uid,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
         )
         return {'status': 'ready', 'request_id': request_id}
 
@@ -149,18 +209,31 @@ class PosCardPointeController(http.Controller):
     def auth(self, request_id):
         active_request = self._get_active_request(request_id)
         if not active_request:
-            _logger.warning("CardPointe auth with unknown request_id=%s user=%s", request_id, request.env.user.id)
+            diag = self._diag_context()
+            _logger.warning(
+                "CardPointe auth with unknown request_id=%s user=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                request.env.user.id,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
             return {
                 'status': 'error',
                 'message': 'Card terminal session expired. Start payment again.',
             }
 
         if active_request['uid'] != request.env.uid:
+            diag = self._diag_context()
             _logger.warning(
-                "CardPointe auth access denied request_id=%s expected_uid=%s got_uid=%s",
+                "CardPointe auth access denied request_id=%s expected_uid=%s got_uid=%s "
+                "pid=%s thread_id=%s active_count=%s",
                 request_id,
                 active_request['uid'],
                 request.env.uid,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
             )
             return {'status': 'error', 'message': 'Access denied for this payment session.'}
 
@@ -173,7 +246,20 @@ class PosCardPointeController(http.Controller):
             self._pop_active_request(request_id)
             return {'status': 'error', 'message': 'CardPointe config missing on payment method.'}
 
-        _logger.info("CardPointe auth started request_id=%s", request_id)
+        diag = self._diag_context()
+        _logger.info(
+            "CardPointe auth started request_id=%s pid=%s thread_id=%s active_count=%s "
+            "config_id=%s payment_method_id=%s uid=%s order_uid=%s payment_line_uuid=%s",
+            request_id,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
+            active_request.get('config_id'),
+            active_request.get('payment_method_id'),
+            active_request.get('uid'),
+            active_request.get('order_uid'),
+            active_request.get('payment_line_uuid'),
+        )
         terminal_client = CardPointeTerminalClient(config)
 
         signature_required_pre_auth = self._signature_required_pre_auth(config, active_request['amount'])
@@ -240,32 +326,86 @@ class PosCardPointeController(http.Controller):
                 'resptext': result.get('resptext'),
             }
         finally:
-            self._pop_active_request(request_id)
+            diag = self._diag_context()
+            _logger.info(
+                "CardPointe auth cleanup starting request_id=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
+            popped_request = self._pop_active_request(request_id)
+            _logger.info(
+                "CardPointe auth cleanup popped request_id=%s found=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                bool(popped_request),
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
             disconnect_result = terminal_client.disconnect(active_request['session_key'])
             if not disconnect_result.get('ok'):
                 _logger.warning(
-                    "CardPointe auth cleanup disconnect failed request_id=%s reason=%s",
+                    "CardPointe auth cleanup disconnect failed request_id=%s reason=%s pid=%s thread_id=%s",
                     request_id,
                     disconnect_result.get('message'),
+                    diag['pid'],
+                    diag['thread_id'],
+                )
+            else:
+                _logger.info(
+                    "CardPointe auth cleanup disconnect ok request_id=%s pid=%s thread_id=%s",
+                    request_id,
+                    diag['pid'],
+                    diag['thread_id'],
                 )
 
     @http.route('/pos_cardpointe_poc/cancel', type='json', auth='user')
     def cancel(self, request_id):
         active_request = self._pop_active_request(request_id)
         if not active_request:
-            _logger.warning("CardPointe cancel with unknown request_id=%s user=%s", request_id, request.env.user.id)
+            diag = self._diag_context()
+            _logger.warning(
+                "CardPointe cancel with unknown request_id=%s user=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                request.env.user.id,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
             return {
                 'status': 'error',
                 'message': 'No active CardPointe terminal request found to cancel.',
             }
+
         if active_request['uid'] != request.env.uid:
+            diag = self._diag_context()
             _logger.warning(
-                "CardPointe cancel access denied request_id=%s expected_uid=%s got_uid=%s",
+                "CardPointe cancel access denied request_id=%s expected_uid=%s got_uid=%s "
+                "pid=%s thread_id=%s active_count=%s",
                 request_id,
                 active_request['uid'],
                 request.env.uid,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
             )
             return {'status': 'error', 'message': 'Access denied for this payment session.'}
+
+        diag = self._diag_context()
+        _logger.info(
+            "CardPointe cancel started request_id=%s pid=%s thread_id=%s active_count=%s "
+            "config_id=%s payment_method_id=%s uid=%s order_uid=%s payment_line_uuid=%s",
+            request_id,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
+            active_request.get('config_id'),
+            active_request.get('payment_method_id'),
+            active_request.get('uid'),
+            active_request.get('order_uid'),
+            active_request.get('payment_line_uuid'),
+        )
 
         payment_method = request.env['pos.payment.method'].browse(active_request['payment_method_id']).exists()
         if not payment_method or not payment_method.cardpointe_config_id:
@@ -276,9 +416,18 @@ class PosCardPointeController(http.Controller):
         disconnect_result = terminal_client.disconnect(active_request['session_key'])
         if not disconnect_result.get('ok'):
             _logger.warning(
-                "CardPointe cancel cleanup disconnect failed request_id=%s reason=%s",
+                "CardPointe cancel cleanup disconnect failed request_id=%s reason=%s pid=%s thread_id=%s",
                 request_id,
                 disconnect_result.get('message'),
+                diag['pid'],
+                diag['thread_id'],
+            )
+        else:
+            _logger.info(
+                "CardPointe cancel cleanup disconnect ok request_id=%s pid=%s thread_id=%s",
+                request_id,
+                diag['pid'],
+                diag['thread_id'],
             )
 
         if result.get('ok'):
@@ -290,11 +439,13 @@ class PosCardPointeController(http.Controller):
             }
 
         _logger.warning(
-            "CardPointe cancel failed request_id=%s message=%s respcode=%s resptext=%s",
+            "CardPointe cancel failed request_id=%s message=%s respcode=%s resptext=%s pid=%s thread_id=%s",
             request_id,
             result.get('message'),
             result.get('respcode'),
             result.get('resptext'),
+            diag['pid'],
+            diag['thread_id'],
         )
         return {
             'status': 'error',
