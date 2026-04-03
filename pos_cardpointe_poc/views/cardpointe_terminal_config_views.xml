@@ -19,6 +19,7 @@
                         <field name="merchant_config_id"/>
                         <field name="merchant_id" readonly="1"/>
                         <field name="device_type"/>
+                        <field name="print_receipt_on_terminal" invisible="device_type != 'clover_flex'"/>
                         <field name="device_serial"/>
                         <field name="auth_key" password="True"/>
                         <field name="request_timeout_seconds"/>
