@@ -144,16 +144,60 @@ class PosCardPointeController(http.Controller):
             signature=signature_blob,
         )
 
+    def _resolve_pos_payment(self, payment_id=None, payment_line_uuid=None, order_uid=None, payment_method_id=None):
+        PosPayment = request.env['pos.payment'].sudo()
+
+        if payment_id:
+            if isinstance(payment_id, int):
+                payment = PosPayment.browse(payment_id).exists()
+                if payment:
+                    return payment
+            payment_id_str = str(payment_id)
+            if payment_id_str.isdigit():
+                payment = PosPayment.browse(int(payment_id_str)).exists()
+                if payment:
+                    return payment
+            if payment_id_str.startswith('pos.payment_'):
+                tail = payment_id_str.split('pos.payment_', 1)[1]
+                if tail.isdigit():
+                    payment = PosPayment.browse(int(tail)).exists()
+                    if payment:
+                        return payment
+
+        domain = []
+        if payment_line_uuid:
+            domain.append(('uuid', '=', payment_line_uuid))
+        if order_uid:
+            domain.append(('pos_order_id.uuid', '=', order_uid))
+        if payment_method_id:
+            domain.append(('payment_method_id', '=', int(payment_method_id)))
+
+        if domain:
+            return PosPayment.search(domain, limit=1)
+
+        return PosPayment.browse()
+
     @http.route('/pos_cardpointe_poc/start', type='json', auth='user')
-    def start(self, pos_config_id, payment_method_id, amount, currency, order_uid, payment_line_uuid, payment_id=None):
+    def start(
+        self,
+        pos_config_id,
+        payment_method_id,
+        amount,
+        currency,
+        order_uid,
+        payment_line_uuid,
+        payment_id=None,
+        payment_client_id=None,
+    ):
         diag = self._diag_context()
         _logger.info(
-            "CardPointe start user=%s pos_config_id=%s payment_method_id=%s payment_id=%s amount=%s currency=%s "
+            "CardPointe start user=%s pos_config_id=%s payment_method_id=%s payment_id=%s payment_client_id=%s amount=%s currency=%s "
             "order_uid=%s line=%s pid=%s thread_id=%s active_count=%s",
             request.env.user.id,
             pos_config_id,
             payment_method_id,
             payment_id,
+            payment_client_id,
             amount,
             currency,
             order_uid,
@@ -166,7 +210,12 @@ class PosCardPointeController(http.Controller):
         _payment_method, config, error = self._validate_start_payload(pos_config_id, payment_method_id)
         if error:
             return error
-        payment = request.env['pos.payment'].sudo().browse(int(payment_id or 0)).exists()
+        payment = self._resolve_pos_payment(
+            payment_id=payment_id,
+            payment_line_uuid=payment_line_uuid,
+            order_uid=order_uid,
+            payment_method_id=payment_method_id,
+        )
         if not payment:
             return {'status': 'error', 'message': 'POS payment not found.'}
         if payment.payment_method_id.id != int(payment_method_id):
