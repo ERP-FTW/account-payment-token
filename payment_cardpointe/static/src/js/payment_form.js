@@ -64,6 +64,7 @@ odoo.define('payment_cardpointe.payment_form', require => {
                             'token': tokenPayload.token,
                             'meta': tokenPayload.meta || {},
                             'save_token': saveToken,
+                            'flow': flow || 'direct',
                             'access_token': processingValues.access_token || this.txContext.accessToken,
                         }
                     });
