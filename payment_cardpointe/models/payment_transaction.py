@@ -31,22 +31,39 @@ class PaymentTransaction(models.Model):
         }
         return {k: v for k, v in values.items() if v}
 
-    def _cardpointe_build_cnp_auth_payload(self, token, mid, extra_payload=None):
+    def _cardpointe_build_cnp_auth_payload(self, mid, account=None, profile=None, ecomind="E", extra_payload=None):
         """Build a website CNP /auth payload from transaction and billing values."""
         self.ensure_one()
         payload = {
             "merchid": mid,
-            "account": token,
             "amount": "%.2f" % (self.amount or 0.0),
             "currency": self.currency_id.name,
             "capture": "y",
             "orderid": self.reference,
-            "ecomind": "E",
+            "ecomind": ecomind,
         }
+        if account:
+            payload["account"] = account
+        if profile:
+            payload["profile"] = profile
         payload.update(self._cardpointe_get_cnp_billing_contact_values())
         if extra_payload:
             payload.update(extra_payload)
         return payload
+
+    def _cardpointe_build_cof_auth_fields(self, initiator='cit', scheduled=False, ecomind=None):
+        """Build COF-specific auth fields from explicit payment intent inputs."""
+        self.ensure_one()
+        normalized_initiator = (initiator or 'cit').strip().lower()
+        if normalized_initiator not in ('cit', 'mit'):
+            normalized_initiator = 'cit'
+        fields = {
+            'cof': 'C' if normalized_initiator == 'cit' else 'M',
+            'cofscheduled': 'Y' if bool(scheduled) else 'N',
+        }
+        if ecomind:
+            fields['ecomind'] = ecomind
+        return fields
 
     def _get_specific_processing_values(self, processing_values):
         self.ensure_one()
@@ -98,7 +115,7 @@ class PaymentTransaction(models.Model):
         token_last4 = token[-4:] if isinstance(token, str) else '****'
         _logger.info("[CARDPOINTE] charge request tx_ref=%s token_last4=%s", self.reference, token_last4)
 
-        payload = self._cardpointe_build_cnp_auth_payload(token, mid)
+        payload = self._cardpointe_build_cnp_auth_payload(mid, account=token)
 
         response = provider.with_context(
             cardpointe_tx_reference=self.reference
@@ -122,7 +139,7 @@ class PaymentTransaction(models.Model):
         self._cardpointe_fail(message, code)
         return {'ok': False, 'message': message, 'raw': raw}
 
-    def _cardpointe_charge_from_payment_token(self, payment_token):
+    def _cardpointe_charge_from_payment_token(self, payment_token, initiator=None, scheduled=None, ecomind=None):
         """Charge using an existing Odoo payment.token backed by CardPointe profile/account ids."""
         self.ensure_one()
         if self.provider_code != 'cardpointe':
@@ -151,16 +168,19 @@ class PaymentTransaction(models.Model):
             account_id,
         )
 
-        payload = {
-            "merchid": mid,
-            "profile": "%s/%s" % (profile_id, account_id),
-            "amount": "%.2f" % (self.amount or 0.0),
-            "currency": self.currency_id.name,
-            "capture": "y",
-            "orderid": self.reference,
-            "cof": "C",
-            "cofscheduled": "N",
-        }
+        initiator = initiator if initiator is not None else self.env.context.get('cardpointe_initiator', 'cit')
+        scheduled = scheduled if scheduled is not None else self.env.context.get('cardpointe_scheduled', False)
+        ecomind = ecomind if ecomind is not None else self.env.context.get('cardpointe_ecomind')
+
+        payload = self._cardpointe_build_cnp_auth_payload(
+            mid,
+            profile="%s/%s" % (profile_id, account_id),
+            extra_payload=self._cardpointe_build_cof_auth_fields(
+                initiator=initiator,
+                scheduled=scheduled,
+                ecomind=ecomind,
+            ),
+        )
 
         response = provider.with_context(
             cardpointe_tx_reference=self.reference

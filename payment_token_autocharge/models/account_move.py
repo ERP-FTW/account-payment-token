@@ -30,6 +30,15 @@ class AccountMove(models.Model):
         to_pay_moves.sudo().create_electronic_payment()
         return res
 
+    def _cardpointe_saved_token_charge_context(self):
+        """Explicit intent for automated backend saved-token charges (MIT)."""
+        self.ensure_one()
+        return {
+            'cardpointe_initiator': 'mit',
+            'cardpointe_scheduled': True,
+            'cardpointe_flow': 'invoice_autocharge',
+        }
+
     def create_electronic_payment(self):
         tx_obj = self.env['payment.transaction']
         for rec in self:
@@ -45,7 +54,7 @@ class AccountMove(models.Model):
                                                 'operation': 'offline',
                                                 'invoice_ids': [(6, 0, [rec.id])],
                                             })
-                    transaction._send_payment_request()
+                    transaction.with_context(**rec._cardpointe_saved_token_charge_context())._send_payment_request()
                     transaction._cr.commit()
                 except Exception as exp:
                     rec.message_post(

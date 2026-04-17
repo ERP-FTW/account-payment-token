@@ -111,8 +111,8 @@ class TestWebsiteCnpPayload(unittest.TestCase):
 
         payload = self.Transaction._cardpointe_build_cnp_auth_payload(
             tx,
-            token='9400000000000000',
             mid='123456789012',
+            account='9400000000000000',
             extra_payload={'capture': 'n'},
         )
 
@@ -124,6 +124,18 @@ class TestWebsiteCnpPayload(unittest.TestCase):
         self.assertEqual(payload['ecomind'], 'E')
         self.assertEqual(payload['capture'], 'n')
         self.assertEqual(payload['phone'], '+1-555-0000')
+
+    def test_builds_cof_fields_for_cit_and_mit(self):
+        tx = _DummyTx()
+        cof_cit = self.Transaction._cardpointe_build_cof_auth_fields(
+            tx, initiator='cit', scheduled=False
+        )
+        cof_mit = self.Transaction._cardpointe_build_cof_auth_fields(
+            tx, initiator='mit', scheduled=True, ecomind='R'
+        )
+
+        self.assertEqual(cof_cit, {'cof': 'C', 'cofscheduled': 'N'})
+        self.assertEqual(cof_mit, {'cof': 'M', 'cofscheduled': 'Y', 'ecomind': 'R'})
 
 
 if __name__ == '__main__':

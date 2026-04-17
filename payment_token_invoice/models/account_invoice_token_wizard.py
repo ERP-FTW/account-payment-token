@@ -100,6 +100,15 @@ class AccountInvoiceTokenWizard(models.TransientModel):
                 )
             )
 
+    def _cardpointe_saved_token_charge_context(self):
+        """Explicit intent for a user-triggered backend saved-token charge (CIT)."""
+        self.ensure_one()
+        return {
+            'cardpointe_initiator': 'cit',
+            'cardpointe_scheduled': False,
+            'cardpointe_flow': 'invoice_manual_token_charge',
+        }
+
     def action_charge_with_token(self):
         """Create a payment.transaction and send a token payment request.
 
@@ -204,10 +213,11 @@ class AccountInvoiceTokenWizard(models.TransientModel):
         )
 
         # Request provider to perform the token payment.
-        if hasattr(tx, "_send_payment_request"):
-            tx._send_payment_request()
-        elif hasattr(tx, "_process_payment"):
-            tx._process_payment()
+        tx_with_intent = tx.with_context(**self._cardpointe_saved_token_charge_context())
+        if hasattr(tx_with_intent, "_send_payment_request"):
+            tx_with_intent._send_payment_request()
+        elif hasattr(tx_with_intent, "_process_payment"):
+            tx_with_intent._process_payment()
         else:
             raise UserError(_("Payment request method not available for this Odoo version."))
 
