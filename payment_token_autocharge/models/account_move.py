@@ -45,7 +45,7 @@ class AccountMove(models.Model):
                                                 'operation': 'offline',
                                                 'invoice_ids': [(6, 0, [rec.id])],
                                             })
-                    transaction._send_payment_request()
+                    transaction.with_context(cardpointe_cnp_flow='recurring')._send_payment_request()
                     transaction._cr.commit()
                 except Exception as exp:
                     rec.message_post(

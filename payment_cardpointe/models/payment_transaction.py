@@ -15,6 +15,44 @@ ENDPOINT_CHARGE = "/auth"
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
 
+    def _cardpointe_get_ecomind(self, flow=None):
+        """Resolve the CardPointe ecomind indicator for CNP auth requests."""
+        self.ensure_one()
+        flow_value = (
+            flow
+            or self.env.context.get('cardpointe_cnp_flow')
+            or self.env.context.get('cardpointe_flow')
+            or ''
+        )
+        normalized_flow = str(flow_value).strip().lower()
+        if normalized_flow in ('e', 't', 'r'):
+            return normalized_flow.upper()
+
+        flow_map = {
+            # Ecommerce / web / mobile / customer initiated
+            'ecommerce': 'E',
+            'web': 'E',
+            'mobile': 'E',
+            'direct': 'E',
+            'cit': 'E',
+            'customer_initiated': 'E',
+            # Phone or mail order
+            'telephone': 'T',
+            'phone': 'T',
+            'mail': 'T',
+            'moto': 'T',
+            # Merchant-initiated recurring
+            'recurring': 'R',
+            'mit': 'R',
+            'merchant_initiated': 'R',
+        }
+        if normalized_flow in flow_map:
+            return flow_map[normalized_flow]
+
+        if self.token_id and self.operation in ('offline',):
+            return 'R'
+        return 'E'
+
     def _get_specific_processing_values(self, processing_values):
         self.ensure_one()
         res = super()._get_specific_processing_values(processing_values)
@@ -47,7 +85,7 @@ class PaymentTransaction(models.Model):
         full_message = ("%s%s" % (("[%s] " % code) if code else "", message or _("Payment failed."))).strip()
         self._set_error(full_message)
 
-    def _cardpointe_charge_from_token(self, token, meta=None):
+    def _cardpointe_charge_from_token(self, token, meta=None, flow=None):
         self.ensure_one()
         if self.provider_code != 'cardpointe':
             return {'ok': False, 'message': _("CardPointe: invalid provider.")}
@@ -72,6 +110,7 @@ class PaymentTransaction(models.Model):
             "currency": self.currency_id.name,
             "capture": "y",
             "orderid": self.reference,
+            "ecomind": self._cardpointe_get_ecomind(flow=flow),
         }
 
         response = provider.with_context(
@@ -96,7 +135,7 @@ class PaymentTransaction(models.Model):
         self._cardpointe_fail(message, code)
         return {'ok': False, 'message': message, 'raw': raw}
 
-    def _cardpointe_charge_from_payment_token(self, payment_token):
+    def _cardpointe_charge_from_payment_token(self, payment_token, flow=None):
         """Charge using an existing Odoo payment.token backed by CardPointe profile/account ids."""
         self.ensure_one()
         if self.provider_code != 'cardpointe':
@@ -134,6 +173,7 @@ class PaymentTransaction(models.Model):
             "orderid": self.reference,
             "cof": "C",
             "cofscheduled": "N",
+            "ecomind": self._cardpointe_get_ecomind(flow=flow),
         }
 
         response = provider.with_context(
@@ -199,7 +239,7 @@ class PaymentTransaction(models.Model):
             'provider_ref': provider_ref,
         }
 
-    def _cardpointe_charge_and_tokenize_from_token(self, token, meta=None):
+    def _cardpointe_charge_and_tokenize_from_token(self, token, meta=None, flow=None):
         self.ensure_one()
         if self.provider_code != 'cardpointe':
             return {'ok': False, 'message': _("CardPointe: invalid provider.")}
@@ -214,4 +254,4 @@ class PaymentTransaction(models.Model):
             return {'ok': False, 'message': message}
 
         provider._cardpointe_create_or_update_payment_token(partner, profile_result['data'])
-        return self._cardpointe_charge_from_token(token, meta=meta)
+        return self._cardpointe_charge_from_token(token, meta=meta, flow=flow)

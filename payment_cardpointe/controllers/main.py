@@ -25,6 +25,7 @@ class CardPointeController(http.Controller):
         partner_id = kwargs.get('partner_id')
         meta = kwargs.get('meta')
         save_token = self._cardpointe_is_truthy(kwargs.get('save_token'))
+        flow = kwargs.get('flow')
 
         _logger.info(
             "[CARDPOINTE] process request received tx_ref=%s partner_id=%s token_present=%s save_token=%s",
@@ -89,9 +90,9 @@ class CardPointeController(http.Controller):
         if is_validation:
             result = tx_sudo._cardpointe_tokenize_from_token(token, meta=meta)
         elif save_token:
-            result = tx_sudo._cardpointe_charge_and_tokenize_from_token(token, meta=meta)
+            result = tx_sudo._cardpointe_charge_and_tokenize_from_token(token, meta=meta, flow=flow)
         else:
-            result = tx_sudo._cardpointe_charge_from_token(token, meta=meta)
+            result = tx_sudo._cardpointe_charge_from_token(token, meta=meta, flow=flow)
 
         if not result.get('ok'):
             _logger.warning(
