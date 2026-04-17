@@ -15,6 +15,39 @@ ENDPOINT_CHARGE = "/auth"
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
 
+    def _cardpointe_get_cnp_billing_contact_values(self):
+        """Extract the best-available billing/contact fields for CNP e-commerce auth."""
+        self.ensure_one()
+        partner = self.partner_id.commercial_partner_id
+        values = {
+            'name': partner.name,
+            'email': partner.email,
+            'phone': partner.phone or partner.mobile,
+            'address': partner.street,
+            'city': partner.city,
+            'region': partner.state_id.code if partner.state_id else None,
+            'country': partner.country_id.code if partner.country_id else None,
+            'postal': partner.zip,
+        }
+        return {k: v for k, v in values.items() if v}
+
+    def _cardpointe_build_cnp_auth_payload(self, token, mid, extra_payload=None):
+        """Build a website CNP /auth payload from transaction and billing values."""
+        self.ensure_one()
+        payload = {
+            "merchid": mid,
+            "account": token,
+            "amount": "%.2f" % (self.amount or 0.0),
+            "currency": self.currency_id.name,
+            "capture": "y",
+            "orderid": self.reference,
+            "ecomind": "E",
+        }
+        payload.update(self._cardpointe_get_cnp_billing_contact_values())
+        if extra_payload:
+            payload.update(extra_payload)
+        return payload
+
     def _get_specific_processing_values(self, processing_values):
         self.ensure_one()
         res = super()._get_specific_processing_values(processing_values)
@@ -65,14 +98,7 @@ class PaymentTransaction(models.Model):
         token_last4 = token[-4:] if isinstance(token, str) else '****'
         _logger.info("[CARDPOINTE] charge request tx_ref=%s token_last4=%s", self.reference, token_last4)
 
-        payload = {
-            "merchid": mid,
-            "account": token,
-            "amount": "%.2f" % (self.amount or 0.0),
-            "currency": self.currency_id.name,
-            "capture": "y",
-            "orderid": self.reference,
-        }
+        payload = self._cardpointe_build_cnp_auth_payload(token, mid)
 
         response = provider.with_context(
             cardpointe_tx_reference=self.reference
@@ -214,4 +240,4 @@ class PaymentTransaction(models.Model):
             return {'ok': False, 'message': message}
 
         provider._cardpointe_create_or_update_payment_token(partner, profile_result['data'])
-        return self._cardpointe_charge_from_token(token, meta=meta)
+        return self.with_context(cardpointe_flow='website_cnp')._cardpointe_charge_from_token(token, meta=meta)

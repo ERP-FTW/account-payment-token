@@ -81,17 +81,19 @@ class CardPointeController(http.Controller):
             )
             raise ValidationError("CardPointe: " + _("Received tampered payment request data."))
 
+        tx_website_cnp = tx_sudo.with_context(cardpointe_flow='website_cnp')
+
         is_validation = (
             getattr(tx_sudo, 'operation', False) == 'validation'
             or not tx_sudo.amount
         )
 
         if is_validation:
-            result = tx_sudo._cardpointe_tokenize_from_token(token, meta=meta)
+            result = tx_website_cnp._cardpointe_tokenize_from_token(token, meta=meta)
         elif save_token:
-            result = tx_sudo._cardpointe_charge_and_tokenize_from_token(token, meta=meta)
+            result = tx_website_cnp._cardpointe_charge_and_tokenize_from_token(token, meta=meta)
         else:
-            result = tx_sudo._cardpointe_charge_from_token(token, meta=meta)
+            result = tx_website_cnp._cardpointe_charge_from_token(token, meta=meta)
 
         if not result.get('ok'):
             _logger.warning(
