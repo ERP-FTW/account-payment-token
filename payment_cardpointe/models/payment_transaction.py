@@ -15,6 +15,16 @@ ENDPOINT_CHARGE = "/auth"
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
 
+    def _cardpointe_build_saved_token_auth_payload(self, flow=None):
+        """Build CardPointe stored-credential fields for saved-token auth requests."""
+        self.ensure_one()
+        is_merchant_initiated = bool(self.token_id and self.operation in ('offline',))
+        return {
+            "cof": "M" if is_merchant_initiated else "C",
+            "cofscheduled": "Y" if is_merchant_initiated else "N",
+            "ecomind": self._cardpointe_get_ecomind(flow=flow),
+        }
+
     def _cardpointe_get_ecomind(self, flow=None):
         """Resolve the CardPointe ecomind indicator for CNP auth requests."""
         self.ensure_one()
@@ -171,9 +181,7 @@ class PaymentTransaction(models.Model):
             "currency": self.currency_id.name,
             "capture": "y",
             "orderid": self.reference,
-            "cof": "C",
-            "cofscheduled": "N",
-            "ecomind": self._cardpointe_get_ecomind(flow=flow),
+            **self._cardpointe_build_saved_token_auth_payload(flow=flow),
         }
 
         response = provider.with_context(
