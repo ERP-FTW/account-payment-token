@@ -15,14 +15,40 @@ ENDPOINT_CHARGE = "/auth"
 class PaymentTransaction(models.Model):
     _inherit = 'payment.transaction'
 
-    def _cardpointe_build_saved_token_auth_payload(self, flow=None):
-        """Build CardPointe stored-credential fields for saved-token auth requests."""
+    def _cardpointe_set_default_stored_credential_semantics(self, initiator=None, schedule=None):
+        """Fill generic stored-credential semantics when fields exist and values are missing."""
         self.ensure_one()
-        is_merchant_initiated = bool(self.token_id and self.operation in ('offline',))
+        write_vals = {}
+        if 'stored_credential_initiator' in self._fields and not self.stored_credential_initiator:
+            write_vals['stored_credential_initiator'] = initiator or (
+                'merchant' if self.operation in ('offline',) else 'customer'
+            )
+        if 'stored_credential_schedule' in self._fields and not self.stored_credential_schedule:
+            write_vals['stored_credential_schedule'] = schedule or (
+                'scheduled' if self.operation in ('offline',) else 'unscheduled'
+            )
+        if write_vals:
+            self.write(write_vals)
+
+    def _cardpointe_get_stored_credential_payload_fields(self):
+        """Map generic stored-credential semantics to CardPointe auth fields."""
+        self.ensure_one()
+        semantics = (
+            self._get_stored_credential_semantics()
+            if hasattr(self, '_get_stored_credential_semantics')
+            else {}
+        )
+        initiator = semantics.get('initiator')
+        schedule = semantics.get('schedule')
+
+        if not initiator:
+            initiator = 'merchant' if self.operation in ('offline',) else 'customer'
+        if not schedule:
+            schedule = 'scheduled' if self.operation in ('offline',) else 'unscheduled'
+
         return {
-            "cof": "M" if is_merchant_initiated else "C",
-            "cofscheduled": "Y" if is_merchant_initiated else "N",
-            "ecomind": self._cardpointe_get_ecomind(flow=flow),
+            "cof": "M" if initiator == 'merchant' else "C",
+            "cofscheduled": "Y" if schedule == 'scheduled' else "N",
         }
 
     def _cardpointe_get_ecomind(self, flow=None):
@@ -62,6 +88,23 @@ class PaymentTransaction(models.Model):
         if self.token_id and self.operation in ('offline',):
             return 'R'
         return 'E'
+
+    def _cardpointe_get_cnp_contact_payload(self, meta=None):
+        """Build best-effort CNP billing/contact fields for CardPointe auth payloads."""
+        self.ensure_one()
+        partner = self.partner_id.commercial_partner_id
+        metadata = meta if isinstance(meta, dict) else {}
+        payload = {
+            "name": metadata.get('name') or partner.name,
+            "email": metadata.get('email') or partner.email,
+            "phone": metadata.get('phone') or partner.phone,
+            "address": metadata.get('address') or partner.street,
+            "city": metadata.get('city') or partner.city,
+            "region": metadata.get('region') or (partner.state_id.code if partner.state_id else None),
+            "country": metadata.get('country') or (partner.country_id.code if partner.country_id else None),
+            "postal": metadata.get('postal') or partner.zip,
+        }
+        return {key: value for key, value in payload.items() if value}
 
     def _get_specific_processing_values(self, processing_values):
         self.ensure_one()
@@ -121,6 +164,7 @@ class PaymentTransaction(models.Model):
             "capture": "y",
             "orderid": self.reference,
             "ecomind": self._cardpointe_get_ecomind(flow=flow),
+            **self._cardpointe_get_cnp_contact_payload(meta=meta),
         }
 
         response = provider.with_context(
@@ -181,7 +225,8 @@ class PaymentTransaction(models.Model):
             "currency": self.currency_id.name,
             "capture": "y",
             "orderid": self.reference,
-            **self._cardpointe_build_saved_token_auth_payload(flow=flow),
+            "ecomind": self._cardpointe_get_ecomind(flow=flow),
+            **self._cardpointe_get_stored_credential_payload_fields(),
         }
 
         response = provider.with_context(
@@ -214,6 +259,9 @@ class PaymentTransaction(models.Model):
                 continue
             if not tx.token_id:
                 continue
+            tx._cardpointe_set_default_stored_credential_semantics(
+                initiator='customer', schedule='unscheduled'
+            )
             tx._cardpointe_charge_from_payment_token(tx.token_id)
         return super_result
 

@@ -172,6 +172,8 @@ class AccountInvoiceTokenWizard(models.TransientModel):
             "currency_id": invoice.currency_id.id,
             "operation": "online_token",
             "company_id": invoice.company_id.id,
+            "stored_credential_initiator": "merchant",
+            "stored_credential_schedule": "unscheduled",
         }
         tx_model = self.env["payment.transaction"]
         if "provider_id" in tx_model._fields:
