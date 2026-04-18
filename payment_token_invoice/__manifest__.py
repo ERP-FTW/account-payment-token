@@ -7,7 +7,8 @@
     "author": "Your Company",
     "depends": [
         "account",
-        "payment"
+        "payment",
+        "payment_token_base",
     ],
     "data": [
         "security/ir.model.access.csv",

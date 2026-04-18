@@ -55,6 +55,11 @@ class CardPointeController(http.Controller):
         if not tx_sudo:
             raise ValidationError("CardPointe: " + _("Transaction not found."))
 
+        if hasattr(tx_sudo, '_cardpointe_set_default_stored_credential_semantics'):
+            tx_sudo._cardpointe_set_default_stored_credential_semantics(
+                initiator='customer', schedule='unscheduled'
+            )
+
         try:
             payload_partner_id = int(partner_id) if partner_id is not None else None
         except (TypeError, ValueError):
