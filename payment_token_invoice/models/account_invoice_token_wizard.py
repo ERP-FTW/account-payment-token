@@ -187,13 +187,28 @@ class AccountInvoiceTokenWizard(models.TransientModel):
 
         tx = self.env["payment.transaction"].create(tx_vals)
 
-        # We log the transaction reference early for easier tracing
+        # Force generic stored-credential semantics after create.
+        # We intentionally keep this generic and provider-agnostic.
+        semantic_write_vals = {}
+        if "stored_credential_initiator" in tx._fields:
+            semantic_write_vals["stored_credential_initiator"] = "merchant"
+        if "stored_credential_schedule" in tx._fields:
+            semantic_write_vals["stored_credential_schedule"] = "unscheduled"
+        if semantic_write_vals:
+            tx.write(semantic_write_vals)
+            tx.invalidate_recordset(["stored_credential_initiator", "stored_credential_schedule"])
+
+        # We log the transaction reference and actual persisted semantics for tracing
         _logger.info(
-            "Created payment.transaction %s (id=%s) for invoice %s (id=%s)",
+            "Created payment.transaction %s (id=%s) for invoice %s (id=%s) | "
+            "operation=%s stored_credential_initiator=%s stored_credential_schedule=%s",
             tx.reference,
             tx.id,
             invoice.display_name,
             invoice.id,
+            tx.operation,
+            getattr(tx, "stored_credential_initiator", False),
+            getattr(tx, "stored_credential_schedule", False),
         )
 
         invoice.message_post(

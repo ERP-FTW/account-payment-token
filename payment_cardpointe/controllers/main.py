@@ -27,14 +27,6 @@ class CardPointeController(http.Controller):
         save_token = self._cardpointe_is_truthy(kwargs.get('save_token'))
         flow = kwargs.get('flow')
 
-        _logger.info(
-            "[CARDPOINTE] process request received tx_ref=%s partner_id=%s token_present=%s save_token=%s",
-            reference,
-            partner_id,
-            bool(token),
-            save_token,
-        )
-
         missing_fields = []
         if not reference:
             missing_fields.append('reference')
@@ -54,6 +46,11 @@ class CardPointeController(http.Controller):
         ], limit=1)
         if not tx_sudo:
             raise ValidationError("CardPointe: " + _("Transaction not found."))
+
+        if hasattr(tx_sudo, '_cardpointe_set_default_stored_credential_semantics'):
+            tx_sudo._cardpointe_set_default_stored_credential_semantics(
+                initiator='customer', schedule='unscheduled'
+            )
 
         try:
             payload_partner_id = int(partner_id) if partner_id is not None else None
@@ -85,6 +82,19 @@ class CardPointeController(http.Controller):
         is_validation = (
             getattr(tx_sudo, 'operation', False) == 'validation'
             or not tx_sudo.amount
+        )
+
+        effective_save_payment_method = bool(is_validation or save_token)
+
+        _logger.info(
+            "[CARDPOINTE] process request received tx_ref=%s partner_id=%s token_present=%s "
+            "save_token=%s is_validation=%s effective_save_payment_method=%s",
+            reference,
+            partner_id,
+            bool(token),
+            save_token,
+            is_validation,
+            effective_save_payment_method,
         )
 
         if is_validation:

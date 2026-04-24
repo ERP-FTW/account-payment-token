@@ -20,6 +20,7 @@
     },
     "depends": [
         "account_payment",
+        "payment_token_base",
     ],
     "data": [
         'views/account_move.xml'
