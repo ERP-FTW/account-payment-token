@@ -3,8 +3,3 @@ from odoo import models
 
 class PosSession(models.Model):
     _inherit = 'pos.session'
-
-    def _loader_params_pos_payment_method(self):
-        params = super()._loader_params_pos_payment_method()
-        params['search_params']['fields'].append('cardpointe_config_id')
-        return params

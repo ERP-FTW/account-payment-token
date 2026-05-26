@@ -62,6 +62,28 @@ class PosPayment(models.Model):
         ('post_readSignature', 'Post readSignature'),
     ])
 
+    cardpointe_capture_method = fields.Selection([
+        ('terminal', 'Terminal'),
+        ('iframe_manual', 'Manual iFrame'),
+        ('external_reference', 'External Reference'),
+    ], default='terminal', string='CardPointe Capture Method')
+    cardpointe_ecomind = fields.Selection([
+        ('E', 'Ecommerce'),
+        ('T', 'Telephone/Mail'),
+        ('R', 'Recurring'),
+    ], string='CardPointe ecomind')
+    cardpointe_fallback_reason = fields.Selection([
+        ('manual_selected', 'Manual selected'),
+        ('terminal_error', 'Terminal error'),
+        ('terminal_timeout', 'Terminal timeout'),
+        ('terminal_in_use', 'Terminal in use'),
+        ('terminal_merchant_mode', 'Terminal merchant mode'),
+        ('server_error', 'Server error'),
+    ], string='Manual Entry Reason')
+    cardpointe_terminal_error_status = fields.Char()
+    cardpointe_terminal_error_message = fields.Char()
+    cardpointe_gateway_http_status = fields.Integer()
+
     @api.model
     def _load_pos_data_fields(self, config_id):
         fields_list = list(self._CARDPOINTE_POS_PAYMENT_BASE_FIELDS)
@@ -80,6 +102,12 @@ class PosPayment(models.Model):
             'cardpointe_signature_required',
             'cardpointe_signature_captured',
             'cardpointe_signature_method',
+            'cardpointe_capture_method',
+            'cardpointe_ecomind',
+            'cardpointe_fallback_reason',
+            'cardpointe_terminal_error_status',
+            'cardpointe_terminal_error_message',
+            'cardpointe_gateway_http_status',
         ]
         return list(dict.fromkeys(fields_list))
 
