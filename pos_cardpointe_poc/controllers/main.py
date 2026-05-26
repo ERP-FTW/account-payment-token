@@ -193,10 +193,21 @@ class PosCardPointeController(http.Controller):
         }
 
     @http.route('/pos_cardpointe_poc/start', type='json', auth='user')
-    def start(self, pos_config_id, payment_method_id, amount, currency, order_uid, payment_line_uuid):
+    def start(
+        self,
+        pos_config_id,
+        payment_method_id,
+        amount,
+        currency,
+        order_uid,
+        payment_line_uuid,
+        payment_id=None,
+        payment_client_id=None,
+        **kwargs
+    ):
         diag = self._diag_context()
         _logger.info(
-            'CardPointe start user=%s pos_config_id=%s payment_method_id=%s amount=%s currency=%s order_uid=%s line=%s pid=%s thread_id=%s',
+            'CardPointe start user=%s pos_config_id=%s payment_method_id=%s amount=%s currency=%s order_uid=%s line=%s payment_id_present=%s payment_client_id_present=%s pid=%s thread_id=%s',
             request.env.user.id,
             pos_config_id,
             payment_method_id,
@@ -204,6 +215,8 @@ class PosCardPointeController(http.Controller):
             currency,
             order_uid,
             payment_line_uuid,
+            bool(payment_id),
+            bool(payment_client_id),
             diag['pid'],
             diag['thread_id'],
         )
