@@ -61,6 +61,19 @@ class PosPayment(models.Model):
         ('inline_authcard', 'Inline authCard'),
         ('post_readSignature', 'Post readSignature'),
     ])
+    cardpointe_request_id = fields.Char(copy=False, index=True)
+    cardpointe_session_key = fields.Char(copy=False)
+    cardpointe_request_state = fields.Selection([
+        ('ready', 'Ready'),
+        ('auth_started', 'Auth Started'),
+        ('cancel_requested', 'Cancel Requested'),
+        ('done', 'Done'),
+        ('error', 'Error'),
+    ], copy=False, index=True)
+    cardpointe_request_uid = fields.Many2one('res.users', copy=False)
+    cardpointe_request_started_at = fields.Datetime(copy=False)
+    cardpointe_request_order_uid = fields.Char(copy=False, index=True)
+    cardpointe_request_payment_line_uuid = fields.Char(copy=False, index=True)
 
     cardpointe_capture_method = fields.Selection([
         ('terminal', 'Terminal'),
@@ -108,9 +121,29 @@ class PosPayment(models.Model):
             'cardpointe_terminal_error_status',
             'cardpointe_terminal_error_message',
             'cardpointe_gateway_http_status',
+            'cardpointe_request_id',
+            'cardpointe_session_key',
+            'cardpointe_request_state',
+            'cardpointe_request_uid',
+            'cardpointe_request_started_at',
+            'cardpointe_request_order_uid',
+            'cardpointe_request_payment_line_uuid',
         ]
         return list(dict.fromkeys(fields_list))
 
+    @api.model
+    def cardpointe_get_payment_for_request(self, request_id):
+        return self.search([
+            ('cardpointe_request_id', '=', request_id),
+            ('cardpointe_request_state', 'in', ['ready', 'auth_started', 'cancel_requested']),
+        ], limit=1)
+
+    def cardpointe_clear_request(self):
+        self.ensure_one()
+        self.write({
+            'cardpointe_request_state': 'done',
+            'cardpointe_session_key': False,
+        })
 
     def _cardpointe_get_merchant_config(self, terminal_config):
         merchant_config = terminal_config.merchant_config_id

@@ -50,6 +50,8 @@ export class CardPointePOC extends PaymentInterface {
                     currency: this.pos.currency.name,
                     order_uid: order.uuid,
                     payment_line_uuid: line.uuid,
+                    payment_id: typeof line.id === "number" ? line.id : false,
+                    payment_client_id: line.id || false,
                 },
                 { silent: true }
             );
@@ -68,7 +70,11 @@ export class CardPointePOC extends PaymentInterface {
         delete this._cashierCancelledByUuid[uuid];
         let result;
         try {
-            result = await rpc("/pos_cardpointe_poc/auth", { request_id: startResult.request_id }, { silent: true });
+            result = await rpc(
+                "/pos_cardpointe_poc/auth",
+                { request_id: startResult.request_id, amount: line.amount },
+                { silent: true }
+            );
         } catch {
             this._showError(_t("Could not reach Odoo server during terminal payment."));
             line.set_payment_status("retry");

@@ -2,7 +2,7 @@ import logging
 import threading
 import uuid
 
-from odoo import http
+from odoo import fields, http
 from odoo.exceptions import UserError
 from odoo.http import request
 
@@ -180,9 +180,26 @@ class PosCardPointeController(http.Controller):
     def start(self, pos_config_id, payment_method_id, amount, currency, order_uid, payment_line_uuid):
         _logger.info(
             "CardPointe start user=%s pos_config_id=%s payment_method_id=%s amount=%s currency=%s order_uid=%s line=%s",
+    def start(
+        self,
+        pos_config_id,
+        payment_method_id,
+        amount,
+        currency,
+        order_uid,
+        payment_line_uuid,
+        payment_id=None,
+        payment_client_id=None,
+    ):
+        diag = self._diag_context()
+        _logger.info(
+            "CardPointe start user=%s pos_config_id=%s payment_method_id=%s payment_id=%s payment_client_id=%s amount=%s currency=%s "
+            "order_uid=%s line=%s pid=%s thread_id=%s active_count=%s",
             request.env.user.id,
             pos_config_id,
             payment_method_id,
+            payment_id,
+            payment_client_id,
             amount,
             currency,
             order_uid,
@@ -192,6 +209,27 @@ class PosCardPointeController(http.Controller):
         _payment_method, config, error = self._validate_start_payload(pos_config_id, payment_method_id)
         if error:
             return error
+        if (
+            config.cardpointe_active_request_state in ('ready', 'auth_started', 'cancel_requested')
+            and config.cardpointe_active_session_key
+        ):
+            _logger.warning(
+                "CardPointe start blocked by active request config_id=%s request_id=%s payment_method_id=%s order_uid=%s payment_line_uuid=%s",
+                config.id,
+                config.cardpointe_active_request_id,
+                payment_method_id,
+                order_uid,
+                payment_line_uuid,
+            )
+            if config.cardpointe_active_payment_line_uuid == payment_line_uuid:
+                return {
+                    'status': 'in_use',
+                    'message': 'This payment line already has an active CardPointe terminal session.',
+                }
+            return {
+                'status': 'in_use',
+                'message': 'Terminal is already handling another CardPointe request.',
+            }
 
         connect_result = CardPointeTerminalClient(config).connect()
         if not connect_result.get('ok'):
@@ -221,9 +259,28 @@ class PosCardPointeController(http.Controller):
         )
         _logger.info(
             "CardPointe terminal session established request_id=%s payment_method_id=%s order_uid=%s",
+        config.write({
+            'cardpointe_active_request_id': request_id,
+            'cardpointe_active_session_key': connect_result['session_key'],
+            'cardpointe_active_request_state': 'ready',
+            'cardpointe_active_request_uid': request.env.user.id,
+            'cardpointe_active_started_at': fields.Datetime.now(),
+            'cardpointe_active_order_uid': order_uid,
+            'cardpointe_active_payment_line_uuid': payment_line_uuid,
+            'cardpointe_active_payment_method_id': int(payment_method_id),
+        })
+        diag = self._diag_context()
+        _logger.info(
+            "CardPointe terminal session established request_id=%s config_id=%s payment_method_id=%s order_uid=%s payment_line_uuid=%s "
+            "pid=%s thread_id=%s active_count=%s",
             request_id,
+            config.id,
             payment_method_id,
             order_uid,
+            payment_line_uuid,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
         )
         return {'status': 'ready', 'request_id': request_id}
 
@@ -232,39 +289,67 @@ class PosCardPointeController(http.Controller):
         active_request = self._get_active_request(request_id)
         if not active_request:
             _logger.warning("CardPointe auth with unknown request_id=%s user=%s", request_id, request.env.user.id)
+    def auth(self, request_id, amount=None):
+        config = request.env['pos.cardpointe.terminal.config'].sudo().cardpointe_get_config_for_request(request_id)
+        if not config:
+            diag = self._diag_context()
+            _logger.warning(
+                "CardPointe auth with unknown request_id=%s user=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                request.env.user.id,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
             return {
                 'status': 'error',
                 'message': 'Card terminal session expired. Start payment again.',
             }
 
         if active_request['uid'] != request.env.uid:
+        if config.cardpointe_active_request_uid.id != request.env.uid:
+            diag = self._diag_context()
             _logger.warning(
                 "CardPointe auth access denied request_id=%s expected_uid=%s got_uid=%s",
                 request_id,
-                active_request['uid'],
+                config.cardpointe_active_request_uid.id,
                 request.env.uid,
             )
             return {'status': 'error', 'message': 'Access denied for this payment session.'}
 
-        payment_method = request.env['pos.payment.method'].browse(active_request['payment_method_id']).exists()
+        payment_method = config.cardpointe_active_payment_method_id
         if not payment_method:
-            self._pop_active_request(request_id)
             return {'status': 'error', 'message': 'Payment method no longer available.'}
-        config = payment_method.cardpointe_config_id
-        if not config:
-            self._pop_active_request(request_id)
+        if not payment_method.cardpointe_config_id:
             return {'status': 'error', 'message': 'CardPointe config missing on payment method.'}
 
         _logger.info("CardPointe auth started request_id=%s", request_id)
+        session_key = config.cardpointe_active_session_key
+        config.write({'cardpointe_active_request_state': 'auth_started'})
+        diag = self._diag_context()
+        _logger.info(
+            "CardPointe auth started request_id=%s config_id=%s pid=%s thread_id=%s active_count=%s "
+            "config_id=%s payment_method_id=%s uid=%s order_uid=%s payment_line_uuid=%s",
+            request_id,
+            config.id,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
+            config.id,
+            payment_method.id,
+            config.cardpointe_active_request_uid.id,
+            config.cardpointe_active_order_uid,
+            config.cardpointe_active_payment_line_uuid,
+        )
         terminal_client = CardPointeTerminalClient(config)
 
-        signature_required_pre_auth = self._signature_required_pre_auth(config, active_request['amount'])
+        signature_required_pre_auth = self._signature_required_pre_auth(config, amount)
 
         try:
             result = terminal_client.auth_card_with_session(
-                amount_dollars=active_request['amount'],
-                order_id=active_request['order_uid'],
-                session_key=active_request['session_key'],
+                amount_dollars=amount,
+                order_id=config.cardpointe_active_order_uid,
+                session_key=session_key,
                 include_signature=signature_required_pre_auth,
             )
 
@@ -277,7 +362,7 @@ class PosCardPointeController(http.Controller):
                 signature_method = 'post_readSignature' if signature_required else ''
 
                 if signature_required:
-                    read_sig_result = terminal_client.read_signature(active_request['session_key'])
+                    read_sig_result = terminal_client.read_signature(session_key)
                     if not read_sig_result.get('ok'):
                         _logger.warning(
                             "CardPointe on_policy readSignature failed request_id=%s reason=%s",
@@ -336,32 +421,131 @@ class PosCardPointeController(http.Controller):
         active_request = self._pop_active_request(request_id)
         if not active_request:
             _logger.warning("CardPointe cancel with unknown request_id=%s user=%s", request_id, request.env.user.id)
+            diag = self._diag_context()
+            _logger.info(
+                "CardPointe auth cleanup starting request_id=%s config_id=%s order_uid=%s payment_line_uuid=%s payment_method_id=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                config.id,
+                config.cardpointe_active_order_uid,
+                config.cardpointe_active_payment_line_uuid,
+                payment_method.id,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
+            if session_key:
+                disconnect_result = terminal_client.disconnect(session_key)
+                if not disconnect_result.get('ok'):
+                    _logger.warning(
+                        "CardPointe auth cleanup disconnect failed request_id=%s config_id=%s order_uid=%s payment_line_uuid=%s payment_method_id=%s reason=%s pid=%s thread_id=%s",
+                        request_id,
+                        config.id,
+                        config.cardpointe_active_order_uid,
+                        config.cardpointe_active_payment_line_uuid,
+                        payment_method.id,
+                        disconnect_result.get('message'),
+                        diag['pid'],
+                        diag['thread_id'],
+                    )
+                    config.write({
+                        'cardpointe_active_request_state': 'error',
+                        'cardpointe_active_session_key': False,
+                    })
+                else:
+                    _logger.info(
+                        "CardPointe auth cleanup disconnect ok request_id=%s config_id=%s order_uid=%s payment_line_uuid=%s payment_method_id=%s pid=%s thread_id=%s",
+                        request_id,
+                        config.id,
+                        config.cardpointe_active_order_uid,
+                        config.cardpointe_active_payment_line_uuid,
+                        payment_method.id,
+                        diag['pid'],
+                        diag['thread_id'],
+                    )
+                    config.cardpointe_clear_active_request()
+            else:
+                config.cardpointe_clear_active_request()
+
+    @http.route('/pos_cardpointe_poc/cancel', type='json', auth='user')
+    def cancel(self, request_id):
+        config = request.env['pos.cardpointe.terminal.config'].sudo().cardpointe_get_config_for_request(request_id)
+        if not config:
+            diag = self._diag_context()
+            _logger.warning(
+                "CardPointe cancel with unknown request_id=%s user=%s pid=%s thread_id=%s active_count=%s",
+                request_id,
+                request.env.user.id,
+                diag['pid'],
+                diag['thread_id'],
+                self._active_request_count(),
+            )
             return {
                 'status': 'error',
                 'message': 'No active CardPointe terminal request found to cancel.',
             }
         if active_request['uid'] != request.env.uid:
+
+        if config.cardpointe_active_request_uid.id != request.env.uid:
+            diag = self._diag_context()
             _logger.warning(
                 "CardPointe cancel access denied request_id=%s expected_uid=%s got_uid=%s",
                 request_id,
-                active_request['uid'],
+                config.cardpointe_active_request_uid.id,
                 request.env.uid,
             )
             return {'status': 'error', 'message': 'Access denied for this payment session.'}
 
         payment_method = request.env['pos.payment.method'].browse(active_request['payment_method_id']).exists()
+        diag = self._diag_context()
+        _logger.info(
+            "CardPointe cancel started request_id=%s config_id=%s pid=%s thread_id=%s active_count=%s "
+            "config_id=%s payment_method_id=%s uid=%s order_uid=%s payment_line_uuid=%s",
+            request_id,
+            config.id,
+            diag['pid'],
+            diag['thread_id'],
+            self._active_request_count(),
+            config.id,
+            config.cardpointe_active_payment_method_id.id,
+            config.cardpointe_active_request_uid.id,
+            config.cardpointe_active_order_uid,
+            config.cardpointe_active_payment_line_uuid,
+        )
+
+        payment_method = config.cardpointe_active_payment_method_id
         if not payment_method or not payment_method.cardpointe_config_id:
             return {'status': 'error', 'message': 'CardPointe config no longer available for cancellation.'}
 
+        session_key = config.cardpointe_active_session_key
+        config.write({'cardpointe_active_request_state': 'cancel_requested'})
         terminal_client = CardPointeTerminalClient(payment_method.cardpointe_config_id)
-        result = terminal_client.cancel(active_request['session_key'])
-        disconnect_result = terminal_client.disconnect(active_request['session_key'])
+        result = terminal_client.cancel(session_key)
+        disconnect_result = terminal_client.disconnect(session_key)
         if not disconnect_result.get('ok'):
             _logger.warning(
                 "CardPointe cancel cleanup disconnect failed request_id=%s reason=%s",
+                "CardPointe cancel cleanup disconnect failed request_id=%s config_id=%s order_uid=%s payment_line_uuid=%s payment_method_id=%s reason=%s pid=%s thread_id=%s",
                 request_id,
+                config.id,
+                config.cardpointe_active_order_uid,
+                config.cardpointe_active_payment_line_uuid,
+                payment_method.id,
                 disconnect_result.get('message'),
+                diag['pid'],
+                diag['thread_id'],
             )
+        else:
+            _logger.info(
+                "CardPointe cancel cleanup disconnect ok request_id=%s config_id=%s order_uid=%s payment_line_uuid=%s payment_method_id=%s pid=%s thread_id=%s",
+                request_id,
+                config.id,
+                config.cardpointe_active_order_uid,
+                config.cardpointe_active_payment_line_uuid,
+                payment_method.id,
+                diag['pid'],
+                diag['thread_id'],
+            )
+        config.cardpointe_clear_active_request()
 
         if result.get('ok'):
             return {
