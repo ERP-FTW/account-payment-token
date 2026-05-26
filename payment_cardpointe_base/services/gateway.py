@@ -124,3 +124,23 @@ class CardPointeGatewayClient:
             payload={'merchid': merchid, 'retref': retref, 'signature': signature},
             timeout=30,
         )
+
+
+    def auth(self, payload):
+        """Submit a CardPointe Gateway /auth request."""
+        result = self._request('POST', 'auth', payload=payload or {}, timeout=30)
+        data = result.get('data') or {}
+        approved = (data.get('respstat') or '').upper() == 'A'
+        ok = bool(result.get('ok') and approved)
+        message = data.get('resptext') or result.get('message') or ''
+        return {
+            'ok': ok,
+            'http_status': result.get('http_status'),
+            'data': data,
+            'respcode': data.get('respcode'),
+            'resptext': data.get('resptext'),
+            'retref': data.get('retref'),
+            'authcode': data.get('authcode'),
+            'token': data.get('token'),
+            'message': message,
+        }

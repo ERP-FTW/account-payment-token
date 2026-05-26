@@ -12,6 +12,8 @@
     'assets': {
         'point_of_sale._assets_pos': [
             'pos_cardpointe_poc/static/src/js/pos_cardpointe_poc.js',
+            'pos_cardpointe_poc/static/src/js/manual_entry_popup.js',
+            'pos_cardpointe_poc/static/src/xml/manual_entry_popup.xml',
         ],
     },
     'post_init_hook': 'post_init_hook',
