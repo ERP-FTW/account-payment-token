@@ -228,20 +228,29 @@ class PosCardPointeController(http.Controller):
             config.cardpointe_active_request_state in ('ready', 'auth_started', 'cancel_requested')
             and config.cardpointe_active_session_key
         ):
-            _logger.warning(
-                'CardPointe start blocked by active request config_id=%s request_id=%s payment_method_id=%s order_uid=%s payment_line_uuid=%s',
-                config.id,
-                config.cardpointe_active_request_id,
-                payment_method_id,
-                order_uid,
-                payment_line_uuid,
-            )
-            return {
-                'status': 'in_use',
-                'message': 'This payment line already has an active CardPointe terminal session.'
-                if config.cardpointe_active_payment_line_uuid == payment_line_uuid
-                else 'Terminal is already handling another CardPointe request.',
-            }
+            previous_request_id = config.cardpointe_active_request_id
+            stale_cleared = config.cardpointe_clear_stale_active_request()
+            if stale_cleared:
+                _logger.warning(
+                    'CardPointe start recovered stale runtime lock config_id=%s old_request_id=%s',
+                    config.id,
+                    previous_request_id,
+                )
+            else:
+                _logger.warning(
+                    'CardPointe start blocked by active request config_id=%s request_id=%s payment_method_id=%s order_uid=%s payment_line_uuid=%s',
+                    config.id,
+                    config.cardpointe_active_request_id,
+                    payment_method_id,
+                    order_uid,
+                    payment_line_uuid,
+                )
+                return {
+                    'status': 'in_use',
+                    'message': 'This payment line already has an active CardPointe terminal session.'
+                    if config.cardpointe_active_payment_line_uuid == payment_line_uuid
+                    else 'Terminal is already handling another CardPointe request.',
+                }
 
         connect_result = CardPointeTerminalClient(config).connect()
         if not connect_result.get('ok'):

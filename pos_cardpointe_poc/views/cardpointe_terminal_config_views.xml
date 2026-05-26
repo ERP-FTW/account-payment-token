@@ -10,6 +10,11 @@
                             type="object"
                             class="oe_highlight"
                             groups="base.group_system"/>
+                    <button name="action_cardpointe_clear_active_request"
+                            string="Clear Active CardPointe Request"
+                            type="object"
+                            groups="base.group_system"
+                            invisible="not cardpointe_active_session_key and cardpointe_active_request_state not in ('ready', 'auth_started', 'cancel_requested')"/>
                 </header>
                 <sheet>
                     <group>
@@ -29,6 +34,16 @@
                         <field name="signature_threshold_amount"
                                invisible="signature_mode != 'over_threshold'"
                                required="signature_mode == 'over_threshold'"/>
+                    </group>
+                    <group string="Runtime State">
+                        <field name="cardpointe_active_request_id" readonly="1"/>
+                        <field name="cardpointe_active_session_key" readonly="1"/>
+                        <field name="cardpointe_active_request_state" readonly="1"/>
+                        <field name="cardpointe_active_request_uid" readonly="1"/>
+                        <field name="cardpointe_active_started_at" readonly="1"/>
+                        <field name="cardpointe_active_order_uid" readonly="1"/>
+                        <field name="cardpointe_active_payment_line_uuid" readonly="1"/>
+                        <field name="cardpointe_active_payment_method_id" readonly="1"/>
                     </group>
                 </sheet>
             </form>
