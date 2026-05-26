@@ -13,8 +13,7 @@
                     <button name="action_cardpointe_clear_active_request"
                             string="Clear Active CardPointe Request"
                             type="object"
-                            groups="base.group_system"
-                            invisible="not cardpointe_active_session_key and cardpointe_active_request_state not in ('ready', 'auth_started', 'cancel_requested')"/>
+                            groups="base.group_system"/>
                 </header>
                 <sheet>
                     <group>
