@@ -10,64 +10,86 @@ _logger = logging.getLogger(__name__)
 
 
 class PosCardPointeTippingController(PosCardPointeController):
+    """Add terminal tipping while retaining the current v18 base flow."""
+
+    @staticmethod
+    def _native_tip_configuration_error(pos_config):
+        if not getattr(pos_config, 'iface_tipproduct', False):
+            return 'Enable Tips in the Point of Sale settings before using CardPointe terminal tipping.'
+        if not getattr(pos_config, 'tip_product_id', False):
+            return 'Select a Tip Product in the Point of Sale settings before using CardPointe terminal tipping.'
+        return False
 
     @http.route('/pos_cardpointe_poc/start', type='json', auth='user')
-    def start(self, pos_config_id, payment_method_id, amount, currency, order_uid, payment_line_uuid):
-        result = super().start(pos_config_id, payment_method_id, amount, currency, order_uid, payment_line_uuid)
-        if result.get('status') != 'ready' or not result.get('request_id'):
-            return result
+    def start(
+        self,
+        pos_config_id,
+        payment_method_id,
+        amount,
+        currency,
+        order_uid,
+        payment_line_uuid,
+        payment_id=None,
+        payment_client_id=None,
+        **kwargs
+    ):
+        payment_method = request.env['pos.payment.method'].browse(int(payment_method_id)).exists()
+        terminal_config = payment_method.cardpointe_config_id if payment_method else False
+        if terminal_config and terminal_config.enable_tips:
+            pos_config = request.env['pos.config'].browse(int(pos_config_id)).exists()
+            error = self._native_tip_configuration_error(pos_config)
+            if error:
+                return {'status': 'error', 'message': error}
 
-        active_request = self._get_active_request(result['request_id'])
-        if not active_request:
-            return result
-
-        payment_method = request.env['pos.payment.method'].browse(active_request['payment_method_id']).exists()
-        config = payment_method.cardpointe_config_id if payment_method else False
-        result['tip_enabled'] = bool(config and config.enable_tips)
-        return result
+        return super().start(
+            pos_config_id=pos_config_id,
+            payment_method_id=payment_method_id,
+            amount=amount,
+            currency=currency,
+            order_uid=order_uid,
+            payment_line_uuid=payment_line_uuid,
+            payment_id=payment_id,
+            payment_client_id=payment_client_id,
+            **kwargs
+        )
 
     @http.route('/pos_cardpointe_poc/auth', type='json', auth='user')
-    def auth(self, request_id):
-        active_request = self._get_active_request(request_id)
-        if not active_request:
-            _logger.warning('CardPointe auth with unknown request_id=%s user=%s', request_id, request.env.user.id)
-            return {
-                'status': 'error',
-                'message': 'Card terminal session expired. Start payment again.',
-            }
+    def auth(self, request_id, amount=None):
+        config = request.env['pos.cardpointe.terminal.config'].sudo().cardpointe_get_config_for_request(request_id)
+        if not config:
+            return {'status': 'error', 'message': 'Card terminal session expired. Start payment again.'}
 
-        if active_request['uid'] != request.env.uid:
-            _logger.warning(
-                'CardPointe auth access denied request_id=%s expected_uid=%s got_uid=%s',
-                request_id,
-                active_request['uid'],
-                request.env.uid,
-            )
+        if config.cardpointe_active_request_uid.id != request.env.uid:
             return {'status': 'error', 'message': 'Access denied for this payment session.'}
 
-        payment_method = request.env['pos.payment.method'].browse(active_request['payment_method_id']).exists()
+        payment_method = config.cardpointe_active_payment_method_id
         if not payment_method:
-            self._pop_active_request(request_id)
             return {'status': 'error', 'message': 'Payment method no longer available.'}
-        config = payment_method.cardpointe_config_id
-        if not config:
-            self._pop_active_request(request_id)
+        if not payment_method.cardpointe_config_id:
             return {'status': 'error', 'message': 'CardPointe config missing on payment method.'}
 
-        _logger.info('CardPointe auth started request_id=%s', request_id)
+        try:
+            base_amount = float(amount or 0.0)
+        except (TypeError, ValueError):
+            return {'status': 'error', 'message': 'Invalid payment amount.'}
+        if base_amount <= 0:
+            return {'status': 'error', 'message': 'Payment amount must be greater than zero.'}
+
+        session_key = config.cardpointe_active_session_key
+        config.write({'cardpointe_active_request_state': 'auth_started'})
         terminal_client = CardPointeTerminalClient(config)
 
-        base_amount = float(active_request['amount'] or 0.0)
         tip_amount = 0.0
         total_amount = base_amount
-        signature_required_pre_auth = self._signature_required_pre_auth(config, base_amount)
+        tip_prompted = bool(config.enable_tips)
+        signature_required_pre_auth = False
 
         try:
-            if config.enable_tips:
+            if tip_prompted:
                 tip_result = terminal_client.tip_with_session(
-                    session_key=active_request['session_key'],
+                    session_key=session_key,
                     amount_dollars=base_amount,
-                    prompt='Select tip amount',
+                    prompt=config.tip_prompt,
                 )
                 if not tip_result.get('ok'):
                     return {
@@ -79,10 +101,11 @@ class PosCardPointeTippingController(PosCardPointeController):
                 tip_amount = float(tip_result.get('tip_amount') or 0.0)
                 total_amount = base_amount + tip_amount
 
+            signature_required_pre_auth = self._signature_required_pre_auth(config, total_amount)
             result = terminal_client.auth_card_with_session(
                 amount_dollars=total_amount,
-                order_id=active_request['order_uid'],
-                session_key=active_request['session_key'],
+                order_id=config.cardpointe_active_order_uid,
+                session_key=session_key,
                 include_signature=signature_required_pre_auth,
             )
 
@@ -93,16 +116,9 @@ class PosCardPointeTippingController(PosCardPointeController):
                 signature_required = self._signature_required_on_policy(result)
                 signature_captured = False
                 signature_method = 'post_readSignature' if signature_required else ''
-
                 if signature_required:
-                    read_sig_result = terminal_client.read_signature(active_request['session_key'])
-                    if not read_sig_result.get('ok'):
-                        _logger.warning(
-                            'CardPointe on_policy readSignature failed request_id=%s reason=%s',
-                            request_id,
-                            read_sig_result.get('message'),
-                        )
-                    else:
+                    read_sig_result = terminal_client.read_signature(session_key)
+                    if read_sig_result.get('ok'):
                         signature_captured = True
                         if result.get('retref'):
                             sigcap_result = self._attach_signature_sigcap(
@@ -112,10 +128,16 @@ class PosCardPointeTippingController(PosCardPointeController):
                             )
                             if not sigcap_result.get('ok'):
                                 _logger.warning(
-                                    'CardPointe on_policy sigcap failed request_id=%s reason=%s',
+                                    'CardPointe tipping sigcap failed request_id=%s reason=%s',
                                     request_id,
                                     sigcap_result.get('message'),
                                 )
+                    else:
+                        _logger.warning(
+                            'CardPointe tipping readSignature failed request_id=%s reason=%s',
+                            request_id,
+                            read_sig_result.get('message'),
+                        )
 
             if result.get('status') == 'approved':
                 return {
@@ -126,9 +148,12 @@ class PosCardPointeTippingController(PosCardPointeController):
                     'resptext': result.get('resptext'),
                     'amount': result.get('amount'),
                     'token': result.get('token'),
+                    'entrymode': result.get('entrymode'),
+                    'emvTagData': result.get('emvTagData'),
                     'signature_required': signature_required,
                     'signature_captured': signature_captured,
                     'signature_method': signature_method,
+                    'cardpointe_tip_prompted': tip_prompted,
                     'cardpointe_tip_amount': tip_amount,
                     'cardpointe_base_amount': base_amount,
                     'cardpointe_total_amount': total_amount,
@@ -141,11 +166,11 @@ class PosCardPointeTippingController(PosCardPointeController):
                 'resptext': result.get('resptext'),
             }
         finally:
-            self._pop_active_request(request_id)
-            disconnect_result = terminal_client.disconnect(active_request['session_key'])
+            disconnect_result = terminal_client.disconnect(session_key) if session_key else {'ok': True}
             if not disconnect_result.get('ok'):
                 _logger.warning(
-                    'CardPointe auth cleanup disconnect failed request_id=%s reason=%s',
+                    'CardPointe tipping disconnect failed request_id=%s reason=%s',
                     request_id,
                     disconnect_result.get('message'),
                 )
+            config.cardpointe_clear_active_request()

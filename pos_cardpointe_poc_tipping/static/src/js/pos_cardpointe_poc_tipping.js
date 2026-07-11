@@ -1,281 +1,55 @@
 /** @odoo-module */
 
 import { _t } from "@web/core/l10n/translation";
-import { rpc } from "@web/core/network/rpc";
 import { patch } from "@web/core/utils/patch";
-import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
-import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
-import { PosPayment } from "@point_of_sale/app/models/pos_payment";
-import { register_payment_method } from "@point_of_sale/app/store/pos_store";
+import { CardPointePOC } from "@pos_cardpointe_poc/js/pos_cardpointe_poc";
 
-export class CardPointePOCTipping extends PaymentInterface {
-    setup() {
-        super.setup(...arguments);
-        this._activeRequestByUuid = {};
-        this._cashierCancelledByUuid = {};
-    }
-
-    _findLine(order, uuid) {
-        return order.payment_ids.find((paymentLine) => paymentLine.uuid === uuid);
-    }
-
+patch(CardPointePOC.prototype, {
     async send_payment_request(uuid) {
-        super.send_payment_request(uuid);
-        const order = this.pos.get_order();
-        const line = this._findLine(order, uuid);
-        if (!line) {
-            return false;
+        this._cardpointeNativeTipPromise = null;
+        const approved = await super.send_payment_request(...arguments);
+        if (approved && this._cardpointeNativeTipPromise) {
+            try {
+                await this._cardpointeNativeTipPromise;
+            } catch (error) {
+                console.error("CardPointe approved, but native Odoo tip update failed", error);
+                this._showError(
+                    _t("The card was approved, but Odoo could not update the native tip line. Review this order before validating it.")
+                );
+            } finally {
+                this._cardpointeNativeTipPromise = null;
+            }
         }
-        if (line.amount === 0) {
-            this._showError(_t("Amount must be greater than zero."));
-            line.set_payment_status("retry");
-            delete this._cashierCancelledByUuid[uuid];
-            return false;
-        }
+        return approved;
+    },
 
-        if (line.amount < 0) {
-            return this._send_refund_request(order, line);
-        }
+    _applyApprovedCardPointeResult(line, result, captureMethod = "terminal") {
+        super._applyApprovedCardPointeResult(...arguments);
 
-        line.set_payment_status("waitingCard");
-        let startResult;
-        try {
-            startResult = await rpc(
-                "/pos_cardpointe_poc/start",
-                {
-                    pos_config_id: this.pos.config.id,
-                    payment_method_id: line.payment_method_id.id,
-                    amount: line.amount,
-                    currency: this.pos.currency.name,
-                    order_uid: order.uuid,
-                    payment_line_uuid: line.uuid,
-                },
-                { silent: true }
-            );
-        } catch {
-            this._showError(_t("Could not reach Odoo server while starting terminal payment."));
-            line.set_payment_status("retry");
-            return false;
-        }
-
-        if (startResult.status !== "ready" || !startResult.request_id) {
-            this._handleFailedResult(line, startResult);
-            return false;
-        }
-
-        this._activeRequestByUuid[uuid] = startResult.request_id;
-        delete this._cashierCancelledByUuid[uuid];
-
-        let result;
-        try {
-            result = await rpc("/pos_cardpointe_poc/auth", { request_id: startResult.request_id }, { silent: true });
-        } catch {
-            this._showError(_t("Could not reach Odoo server during terminal payment."));
-            line.set_payment_status("retry");
-            delete this._activeRequestByUuid[uuid];
-            return false;
-        }
-        delete this._activeRequestByUuid[uuid];
-
-        if (result.status === "approved") {
-            const approvedAmount = this._normalizeAmount(result.amount, line.amount);
-            line.set_amount(approvedAmount);
-            line.cardpointe_retref = result.retref || "";
-            line.cardpointe_authcode = result.authcode || "";
-            line.cardpointe_respcode = result.respcode || "";
-            line.cardpointe_resptext = result.resptext || "";
-            line.cardpointe_token = result.token || "";
-            line.cardpointe_entrymode = result.entrymode || "";
-            line.cardpointe_emvtagdata = result.emvTagData || "";
-            line.cardpointe_status = "approved";
-            line.cardpointe_operation = "sale";
-            line.cardpointe_ok = true;
-            line.cardpointe_signature_required = !!result.signature_required;
-            line.cardpointe_signature_captured = !!result.signature_captured;
-            line.cardpointe_signature_method = result.signature_method || "";
-            line.cardpointe_tip_amount = result.cardpointe_tip_amount || 0.0;
-            line.cardpointe_base_amount = result.cardpointe_base_amount || line.amount;
-            line.transaction_id = result.retref || "";
-            await this._applyTipToOrder(result.cardpointe_tip_amount || 0.0);
-            line.set_payment_status("done");
-            return true;
-        }
-
-        if (result.status === "cancelled" && this._cashierCancelledByUuid[uuid]) {
-            line.cardpointe_status = "cancelled";
-            line.cardpointe_respcode = result.respcode || "";
-            line.cardpointe_resptext = result.resptext || "";
-            line.cardpointe_tip_amount = 0.0;
-            line.cardpointe_base_amount = 0.0;
-            line.set_payment_status("retry");
-            delete this._cashierCancelledByUuid[uuid];
-            return false;
-        }
-
-        this._handleFailedResult(line, result);
-        delete this._cashierCancelledByUuid[uuid];
-        return false;
-    }
-
-    async _applyTipToOrder(tipAmount) {
-        const tip = parseFloat(tipAmount || 0);
-        if (!tip) {
+        if (captureMethod !== "terminal" || !result.cardpointe_tip_prompted) {
             return;
+        }
+
+        const tipAmount = Number.parseFloat(result.cardpointe_tip_amount || 0) || 0;
+        line.cardpointe_tip_amount = tipAmount;
+        line.cardpointe_base_amount = Number.parseFloat(result.cardpointe_base_amount || 0) || 0;
+        this._cardpointeNativeTipPromise = this._applyCardPointeNativeTip(tipAmount);
+    },
+
+    async _applyCardPointeNativeTip(tipAmount) {
+        const order = this.pos.get_order();
+        if (!order) {
+            throw new Error("No active POS order");
         }
         if (!this.pos.config.iface_tipproduct || !this.pos.config.tip_product_id) {
-            this._showError(
-                _t("Tip product is not configured on this POS. Configure native POS tips to post CardPointe tip amounts.")
-            );
-            return;
-        }
-        await this.pos.set_tip(tip);
-    }
-
-    async _send_refund_request(order, line) {
-        const refundedOrderLineIds = order.lines
-            .filter((orderLine) => orderLine.refunded_orderline_id)
-            .map((orderLine) => orderLine.refunded_orderline_id.id || orderLine.refunded_orderline_id);
-        if (!refundedOrderLineIds.length) {
-            this._showError(
-                _t("Refund must be started from a paid ticket so original CardPointe payment can be located.")
-            );
-            line.set_payment_status("retry");
-            return false;
+            throw new Error("Native POS tip product is not configured");
         }
 
-        line.set_payment_status("waiting");
-        let result;
-        try {
-            result = await rpc(
-                "/pos_cardpointe_poc/refund",
-                {
-                    payment_method_id: line.payment_method_id.id,
-                    amount: line.amount,
-                    refunded_orderline_ids: refundedOrderLineIds,
-                },
-                { silent: true }
-            );
-        } catch {
-            this._showError(_t("Could not reach Odoo server during CardPointe refund."));
-            line.set_payment_status("retry");
-            return false;
-        }
+        // Native Odoo behavior creates or updates the configured tip-product line.
+        await this.pos.set_tip(tipAmount);
 
-        if (result.status !== "approved") {
-            this._handleFailedResult(line, result);
-            return false;
-        }
-
-        line.cardpointe_retref = result.retref || "";
-        line.cardpointe_original_retref = result.original_retref || "";
-        line.cardpointe_respcode = result.respcode || "";
-        line.cardpointe_resptext = result.resptext || "";
-        line.cardpointe_status = "approved";
-        line.cardpointe_operation = result.operation || "refund";
-        line.cardpointe_ok = !!result.ok;
-        line.transaction_id = result.retref || "";
-        line.set_payment_status("done");
-        return true;
-    }
-
-    async send_payment_cancel(order, uuid) {
-        super.send_payment_cancel(order, uuid);
-        const line = this._findLine(order, uuid);
-        if (!line) {
-            return false;
-        }
-
-        const requestId = this._activeRequestByUuid[uuid];
-        if (!requestId) {
-            line.set_payment_status("retry");
-            delete this._cashierCancelledByUuid[uuid];
-            return true;
-        }
-
-        this._cashierCancelledByUuid[uuid] = true;
-
-        let result;
-        try {
-            result = await rpc("/pos_cardpointe_poc/cancel", { request_id: requestId }, { silent: true });
-        } catch {
-            this._showError(_t("Could not reach Odoo server to cancel terminal payment."));
-            line.set_payment_status("retry");
-            delete this._cashierCancelledByUuid[uuid];
-            return false;
-        }
-
-        delete this._activeRequestByUuid[uuid];
-        line.cardpointe_status = result.status || "error";
-        line.cardpointe_ok = false;
-        line.cardpointe_signature_required = false;
-        line.cardpointe_signature_captured = false;
-        line.cardpointe_signature_method = "";
-        line.cardpointe_tip_amount = 0.0;
-        line.cardpointe_base_amount = 0.0;
-        line.cardpointe_respcode = result.respcode || "";
-        line.cardpointe_resptext = result.resptext || "";
-        line.set_payment_status("retry");
-
-        if (result.status !== "cancelled") {
-            this._showError(result.message || _t("Cancel request was not accepted by terminal."));
-            delete this._cashierCancelledByUuid[uuid];
-            return false;
-        }
-        return true;
-    }
-
-    _handleFailedResult(line, result) {
-        line.cardpointe_status = result.status || "error";
-        line.cardpointe_ok = false;
-        line.cardpointe_signature_required = false;
-        line.cardpointe_signature_captured = false;
-        line.cardpointe_signature_method = "";
-        line.cardpointe_tip_amount = 0.0;
-        line.cardpointe_base_amount = 0.0;
-        line.cardpointe_respcode = result.respcode || "";
-        line.cardpointe_resptext = result.resptext || "";
-        line.set_payment_status("retry");
-
-        if (result.status === "merchant_mode") {
-            this._showError(
-                _t("Terminal is in Merchant Mode. Open the CardPointe Integrated/Bolt app or switch terminal to Integrated mode.")
-            );
-        } else if (result.status === "cancelled") {
-            this._showError(_t("Payment cancelled on terminal."));
-        } else if (result.status === "timeout") {
-            this._showError(_t("Terminal request timed out. Please check device status and try again."));
-        } else if (result.status === "in_use") {
-            this._showError(_t("Terminal is in use, retry in a few seconds."));
-        } else {
-            this._showError(result.message || _t("Card payment not approved."));
-        }
-    }
-
-    _normalizeAmount(amount, fallback) {
-        if (amount === undefined || amount === null || amount === "") {
-            return fallback;
-        }
-        const value = String(amount);
-        if (value.includes(".")) {
-            return parseFloat(value);
-        }
-        return parseFloat(value) / 100;
-    }
-
-    _showError(message) {
-        this.env.services.dialog.add(AlertDialog, {
-            title: _t("CardPointe POC"),
-            body: message,
-        });
-    }
-}
-
-register_payment_method("cardpointe_poc", CardPointePOCTipping);
-
-patch(PosPayment.prototype, {
-    setup() {
-        super.setup(...arguments);
-        this.cardpointe_tip_amount = this.cardpointe_tip_amount || 0.0;
-        this.cardpointe_base_amount = this.cardpointe_base_amount || 0.0;
+        // Odoo restaurant uses this flag to record that after-payment tipping was handled.
+        // Set it for both a positive tip and an explicit zero-tip selection.
+        order.after_payment_tipping_set = true;
     },
 });
