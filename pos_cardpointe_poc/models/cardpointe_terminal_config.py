@@ -1,7 +1,11 @@
+import logging
+
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError
 
 from odoo.addons.pos_cardpointe_poc.services.cardpointe_terminal import CardPointeTerminalClient
+
+_logger = logging.getLogger(__name__)
 
 
 class CardPointeTerminalConfig(models.Model):
@@ -86,9 +90,69 @@ class CardPointeTerminalConfig(models.Model):
     def cardpointe_clear_active_request(self):
         self.ensure_one()
         self.write({
+            'cardpointe_active_request_id': False,
             'cardpointe_active_request_state': 'done',
             'cardpointe_active_session_key': False,
+            'cardpointe_active_request_uid': False,
+            'cardpointe_active_order_uid': False,
+            'cardpointe_active_payment_line_uuid': False,
+            'cardpointe_active_payment_method_id': False,
         })
+
+    def cardpointe_active_request_is_stale(self):
+        self.ensure_one()
+        if not self.cardpointe_active_session_key:
+            return False
+        if self.cardpointe_active_request_state not in ('ready', 'auth_started', 'cancel_requested'):
+            return False
+        if not self.cardpointe_active_started_at:
+            return False
+        timeout = self.request_timeout_seconds or 120
+        grace_seconds = max(timeout * 2, 300)
+        age = fields.Datetime.now() - self.cardpointe_active_started_at
+        return age.total_seconds() > grace_seconds
+
+    def cardpointe_clear_stale_active_request(self):
+        self.ensure_one()
+        if not self.cardpointe_active_request_is_stale():
+            return False
+        _logger.warning(
+            'CardPointe stale active request cleared config_id=%s request_id=%s state=%s started_at=%s order_uid=%s payment_line_uuid=%s',
+            self.id,
+            self.cardpointe_active_request_id,
+            self.cardpointe_active_request_state,
+            self.cardpointe_active_started_at,
+            self.cardpointe_active_order_uid,
+            self.cardpointe_active_payment_line_uuid,
+        )
+        self.cardpointe_clear_active_request()
+        return True
+
+    def action_cardpointe_clear_active_request(self):
+        self.ensure_one()
+        if not self.env.user.has_group('base.group_system'):
+            raise AccessError(_('Only administrators can clear active CardPointe requests.'))
+        _logger.warning(
+            'CardPointe active request manually cleared by user_id=%s config_id=%s request_id=%s state=%s started_at=%s order_uid=%s payment_line_uuid=%s',
+            self.env.user.id,
+            self.id,
+            self.cardpointe_active_request_id,
+            self.cardpointe_active_request_state,
+            self.cardpointe_active_started_at,
+            self.cardpointe_active_order_uid,
+            self.cardpointe_active_payment_line_uuid,
+        )
+        self.cardpointe_clear_active_request()
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _('CardPointe Runtime State'),
+                'message': _('Active CardPointe request cleared.'),
+                'type': 'success',
+                'sticky': False,
+            },
+        }
 
     @api.onchange('merchant_config_id')
     def _onchange_merchant_config_id(self):
