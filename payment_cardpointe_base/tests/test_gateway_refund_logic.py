@@ -214,6 +214,26 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['operation'], 'refund')
         self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
 
+    def test_explicit_mutation_error_never_authorizes_fallback(self):
+        scenarios = (
+            ('Accepted', 'refund', {'respstat': 'D', 'respcode': '28', 'resptext': 'Txn not settled'}),
+            ('Queued', 'void', {'respstat': 'D', 'respcode': '12', 'resptext': 'Already settled'}),
+        )
+        for settlement, operation, data in scenarios:
+            with self.subTest(settlement=settlement):
+                response = {'ok': True, 'data': dict(data, error='Gateway request timed out.')}
+                kwargs = {operation: response}
+                client = _GatewayStub(
+                    {'retref': 'r', 'amount': '1.00', 'setlstat': settlement,
+                     'voidable': 'Y', 'refundable': 'Y'},
+                    **kwargs,
+                )
+                result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['message'], 'Gateway request timed out.')
+                self.assertEqual(result['operation'], operation)
+                self.assertEqual([call[0] for call in client.calls], ['inquire', operation])
+
     def test_void_not_settled_does_not_fallback_to_refund(self):
         client = _GatewayStub(
             {'retref': 'r', 'amount': '1.00', 'setlstat': 'Queued', 'voidable': 'Y', 'refundable': 'Y'},

@@ -234,7 +234,8 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
 
     if operation == 'void':
         void_result = gw_client.void(merchid, retref)
-        if (_envelope_is_success(void_result) and not _is_approved(void_result)
+        if (_envelope_is_success(void_result) and not _error_issue(void_result)
+                and not _is_approved(void_result)
                 and full_amount and _void_allowed(inquire_data, requested_amount)
                 and _is_settled_for_refund(void_result) and _refund_allowed(inquire_data)):
             refund_result = gw_client.refund(merchid, retref, amount)
@@ -247,7 +248,8 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
         })
 
     refund_result = gw_client.refund(merchid, retref, amount)
-    if (_envelope_is_success(refund_result) and not _is_approved(refund_result)
+    if (_envelope_is_success(refund_result) and not _error_issue(refund_result)
+            and not _is_approved(refund_result)
             and is_txn_not_settled(refund_result)
             and full_amount and _void_allowed(inquire_data, requested_amount)):
         void_result = gw_client.void(merchid, retref)
