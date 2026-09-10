@@ -85,6 +85,41 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['message'], '401 Unauthorized')
         self.assertEqual([call[0] for call in client.calls], ['inquire'])
 
+    def test_successful_inquiry_with_empty_transaction_does_not_mutate(self):
+        client = _GatewayStub({})
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertIn('transaction', result['message'].lower())
+        self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
+    def test_inquiry_transaction_must_match_requested_reference(self):
+        for transaction in ({'amount': '1.00'}, {'retref': 'other', 'amount': '1.00'}):
+            with self.subTest(transaction=transaction):
+                client = _GatewayStub(transaction)
+                result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+                self.assertFalse(result['ok'])
+                self.assertIn('reference', result['message'].lower())
+                self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
+    def test_malformed_inquiry_transaction_does_not_mutate(self):
+        client = _GatewayStub({'retref': ['r'], 'amount': '1.00'})
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertIn('reference', result['message'].lower())
+        self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
+    def test_inquiry_transport_failure_does_not_mutate(self):
+        class FailingInquiryClient(_GatewayStub):
+            def inquire(self, retref, merchid):
+                self.calls.append(('inquire', retref, merchid))
+                raise TimeoutError('gateway unavailable')
+
+        client = FailingInquiryClient({})
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertIn('inquiry failed', result['message'].lower())
+        self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
     def test_explicit_decline_dominates_apparent_success(self):
         client = _GatewayStub({'retref': 'r', 'amount': '1.00', 'setlstat': 'Queued', 'respstat': 'D', 'respcode': '000'})
         result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')

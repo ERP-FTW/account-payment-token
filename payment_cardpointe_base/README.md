@@ -33,8 +33,9 @@ CardPointe logs are tagged with `[CARDPOINTE]`.
 
 ## Refund routing
 
-Every refund first performs an inquiry. A failed or explicitly declined inquiry stops without a
-financial mutation. A full unsettled return uses an amountless void only when the inquiry reports
+Every refund first performs an inquiry. The inquiry must contain a non-empty transaction with the
+same reference that was requested; malformed, mismatched, failed, or explicitly declined inquiries
+stop without a financial mutation. A full unsettled return uses an amountless void only when the inquiry reports
 a known positive original amount exactly equal to the requested amount and does not prohibit
 voiding. Partial returns always call `refund` for their exact amount. Settled/full returns use
 `refund` when eligible; a `respcode=28` partial-refund response is returned as a failure and is

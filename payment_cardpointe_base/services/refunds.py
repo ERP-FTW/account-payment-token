@@ -79,6 +79,17 @@ def _refund_allowed(data):
     return _flag(data, 'refundable') is not False
 
 
+def _validate_inquiry_transaction(inquire_data, requested_retref):
+    if not isinstance(inquire_data, dict) or not inquire_data:
+        return 'CardPointe inquiry returned no transaction data'
+    inquiry_retref = inquire_data.get('retref')
+    if not isinstance(inquiry_retref, str) or not inquiry_retref.strip():
+        return 'CardPointe inquiry returned no transaction reference'
+    if not isinstance(requested_retref, str) or inquiry_retref.strip() != requested_retref.strip():
+        return 'CardPointe inquiry transaction reference does not match the requested reference'
+    return None
+
+
 def choose_operation_from_inquire(inquire, amount=None):
     data = _extract_data(inquire)
     if not _is_full_amount(data.get('amount'), amount):
@@ -104,7 +115,14 @@ def _normalize_result(operation, retref, response, raw=None):
 
 def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
     requested_amount = _money(amount)
-    inquire = gw_client.inquire(retref, merchid)
+    try:
+        inquire = gw_client.inquire(retref, merchid)
+    except Exception as exc:
+        inquire = {
+            'ok': False,
+            'message': f'CardPointe inquiry failed: {exc}',
+            'data': {},
+        }
     inquire_data = _extract_data(inquire)
 
     if not isinstance(inquire, dict) or inquire.get('ok') is False or _has_explicit_failure(inquire):
@@ -112,6 +130,13 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
             'inquire': inquire_data,
             'orderid': orderid,
         })
+    inquiry_error = _validate_inquiry_transaction(inquire_data, retref)
+    if inquiry_error:
+        return _normalize_result('inquire', retref, {
+            'ok': False,
+            'message': inquiry_error,
+            'data': inquire_data,
+        }, {'inquire': inquire_data, 'orderid': orderid})
     if str(inquire_data.get('setlstat') or '').strip().lower() == 'voided':
         return _normalize_result('inquire', retref, {
             'respstat': 'D',
