@@ -19,16 +19,35 @@ def _extract_data(response):
 def _response_message(response):
     data = _extract_data(response)
     if isinstance(response, dict):
-        return response.get('message') or response.get('error') or data.get('error') or data.get('resptext')
-    return data.get('error') or data.get('resptext')
+        message = response.get('message')
+        if isinstance(message, str) and message.strip():
+            return message
+        error = _error_issue(response)
+        return error or data.get('resptext')
+    return _error_issue(response) or data.get('resptext')
+
+
+def _error_issue(response):
+    """Return explicit error text, or a validation error for malformed errors."""
+    data = _extract_data(response)
+    values = []
+    if isinstance(response, dict):
+        values.append(('response', response.get('error')))
+    values.append(('transaction', data.get('error')))
+    for field, value in values:
+        if value is None or value is False:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return value.strip()
+            continue
+        return f'CardPointe {field} returned malformed error'
+    return None
 
 
 def _has_explicit_failure(response):
     data = _extract_data(response)
-    explicit_error = data.get('error')
-    if isinstance(response, dict):
-        explicit_error = response.get('error') or explicit_error
-    if isinstance(explicit_error, str) and explicit_error.strip():
+    if _error_issue(response):
         return True
     status = str(data.get('respstat') or '').strip().upper()
     code_value = data.get('respcode')
@@ -100,6 +119,10 @@ def _validate_inquiry_transaction(inquire_data, requested_retref):
     if not isinstance(requested_retref, str) or inquiry_retref.strip() != requested_retref.strip():
         return 'CardPointe inquiry transaction reference does not match the requested reference'
 
+    error_issue = _error_issue(inquire_data)
+    if error_issue:
+        return error_issue
+
     # These fields control financial routing.  Reject structured values before
     # string coercion can make malformed gateway data look like a valid status.
     string_fields = ('setlstat', 'respstat', 'resptext')
@@ -168,6 +191,13 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
             'inquire': inquire_data,
             'orderid': orderid,
         })
+    inquiry_error = _error_issue(inquire)
+    if inquiry_error:
+        return _normalize_result('inquire', retref, {
+            'ok': False,
+            'message': inquiry_error,
+            'data': inquire_data,
+        }, {'inquire': inquire_data, 'orderid': orderid})
     inquiry_error = _validate_inquiry_transaction(inquire_data, retref)
     if inquiry_error:
         return _normalize_result('inquire', retref, {

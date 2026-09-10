@@ -291,6 +291,26 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['operation'], 'inquire')
         self.assertEqual([call[0] for call in client.calls], ['inquire'])
 
+    def test_malformed_inquiry_error_shapes_do_not_mutate(self):
+        for transaction, outer in (
+            ({'error': True}, {}),
+            ({'error': {'message': 'Invalid transaction'}}, {}),
+            ({'error': 'Invalid transaction'}, {'error': ' '}),
+        ):
+            with self.subTest(transaction=transaction, outer=outer):
+                transaction = dict(transaction, retref='r', amount='1.00', setlstat='Accepted',
+                                   respstat='A', respcode='000', voidable='Y', refundable='Y')
+                client = _GatewayStub(transaction)
+                client.inquire_response.update(outer)
+                result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+                self.assertFalse(result['ok'])
+                self.assertTrue(
+                    'error' in result['message'].lower()
+                    or 'invalid transaction' in result['message'].lower()
+                )
+                self.assertEqual(result['operation'], 'inquire')
+                self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
     def test_empty_inquiry_error_does_not_reject_valid_transaction(self):
         client = _GatewayStub({
             'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted',
@@ -302,6 +322,7 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['operation'], 'refund')
         self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
 
+    def test_gateway_logging_sanitizes_signature_and_receipt(self):
         payload = {'signature': 'abcdef', 'receipt': 'huge-text', 'emvTagData': 'XYZ', 'userfields': '{"receipt":"Y"}', 'resptext': 'A' * 500}
         sanitized = gateway.sanitize_for_log(payload)
         self.assertNotIn('signature', sanitized)
