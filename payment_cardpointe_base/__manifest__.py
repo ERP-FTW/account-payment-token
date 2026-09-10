@@ -4,7 +4,7 @@
     'category': 'Accounting/Payment Providers',
     'summary': 'Base utilities for CardPointe payments',
     'description': 'Shared CardPointe configuration and API helpers.',
-    'depends': ['payment'],
+    'depends': ['payment', 'account'],
     'data': [
         'security/ir.model.access.csv',
         'views/cardpointe_merchant_config_views.xml',
