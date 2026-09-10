@@ -19,14 +19,22 @@ def _extract_data(response):
 def _response_message(response):
     data = _extract_data(response)
     if isinstance(response, dict):
-        return response.get('message') or response.get('error') or data.get('resptext')
-    return data.get('resptext')
+        return response.get('message') or response.get('error') or data.get('error') or data.get('resptext')
+    return data.get('error') or data.get('resptext')
 
 
 def _has_explicit_failure(response):
     data = _extract_data(response)
+    explicit_error = data.get('error')
+    if isinstance(response, dict):
+        explicit_error = response.get('error') or explicit_error
+    if isinstance(explicit_error, str) and explicit_error.strip():
+        return True
     status = str(data.get('respstat') or '').strip().upper()
-    code = str(data.get('respcode') or '').strip()
+    code_value = data.get('respcode')
+    if isinstance(code_value, bool):
+        return True
+    code = str(code_value or '').strip()
     return status in {'D', 'E'} or (code and code not in _SUCCESS_CODES)
 
 
@@ -100,7 +108,7 @@ def _validate_inquiry_transaction(inquire_data, requested_retref):
         if value is not None and not isinstance(value, str):
             return f'CardPointe inquiry returned malformed {field}'
     respcode = inquire_data.get('respcode')
-    if respcode is not None and not isinstance(respcode, (str, int)):
+    if isinstance(respcode, bool) or (respcode is not None and not isinstance(respcode, (str, int))):
         return 'CardPointe inquiry returned malformed respcode'
     amount = inquire_data.get('amount')
     if amount is not None and (isinstance(amount, bool) or not isinstance(amount, (str, int, float, Decimal))):
@@ -155,7 +163,7 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
         }
     inquire_data = _extract_data(inquire)
 
-    if not isinstance(inquire, dict) or inquire.get('ok') is False or _has_explicit_failure(inquire):
+    if not isinstance(inquire, dict) or inquire.get('ok') is False:
         return _normalize_result('inquire', retref, inquire, {
             'inquire': inquire_data,
             'orderid': orderid,
@@ -167,6 +175,11 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
             'message': inquiry_error,
             'data': inquire_data,
         }, {'inquire': inquire_data, 'orderid': orderid})
+    if _has_explicit_failure(inquire):
+        return _normalize_result('inquire', retref, inquire, {
+            'inquire': inquire_data,
+            'orderid': orderid,
+        })
     if str(inquire_data.get('setlstat') or '').strip().lower() == 'voided':
         return _normalize_result('inquire', retref, {
             'respstat': 'D',

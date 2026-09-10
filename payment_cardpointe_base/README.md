@@ -39,5 +39,4 @@ stop without a financial mutation. A full unsettled return uses an amountless vo
 a known positive original amount exactly equal to the requested amount and does not prohibit
 voiding. Partial returns always call `refund` for their exact amount. Settled/full returns use
 `refund` when eligible; a `respcode=28` partial-refund response is returned as a failure and is
-never converted into a full void. A full void may fall back to the exact full refund only when
-the void response indicates settlement and the inquiry still permits both operations.
+never converted into a full void. A full void may fall back to the exact full refund only when the void response indicates settlement and the inquiry still permits both operations. Conversely, a full refund may fall back to an amountless void only after an authoritative non-approved refund response, exact positive full amount match, and permitted void eligibility; approved/transport-failed, partial, prohibited, or negatively-settled responses never authorize a second mutation.

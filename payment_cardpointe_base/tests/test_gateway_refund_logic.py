@@ -266,7 +266,42 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual([call[0] for call in client.calls], ['inquire'])
 
-    def test_gateway_logging_sanitizes_signature_and_receipt(self):
+    def test_boolean_respcode_is_malformed_for_accepted_and_queued_inquiries(self):
+        for settlement in ('Accepted', 'Queued'):
+            with self.subTest(settlement=settlement):
+                client = _GatewayStub({
+                    'retref': 'r', 'amount': '1.00', 'setlstat': settlement,
+                    'respstat': 'A', 'respcode': False, 'voidable': 'Y', 'refundable': 'Y',
+                })
+                result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+                self.assertFalse(result['ok'])
+                self.assertIn('malformed respcode', result['message'].lower())
+                self.assertEqual(result['operation'], 'inquire')
+                self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
+    def test_explicit_inquiry_error_dominates_apparent_success(self):
+        client = _GatewayStub({
+            'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted',
+            'respstat': 'A', 'respcode': '000', 'error': 'Invalid transaction',
+            'voidable': 'Y', 'refundable': 'Y',
+        })
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['message'], 'Invalid transaction')
+        self.assertEqual(result['operation'], 'inquire')
+        self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
+    def test_empty_inquiry_error_does_not_reject_valid_transaction(self):
+        client = _GatewayStub({
+            'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted',
+            'respstat': 'A', 'respcode': '000', 'error': '',
+            'voidable': 'N', 'refundable': 'Y',
+        })
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['operation'], 'refund')
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
+
         payload = {'signature': 'abcdef', 'receipt': 'huge-text', 'emvTagData': 'XYZ', 'userfields': '{"receipt":"Y"}', 'resptext': 'A' * 500}
         sanitized = gateway.sanitize_for_log(payload)
         self.assertNotIn('signature', sanitized)

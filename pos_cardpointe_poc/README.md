@@ -159,5 +159,6 @@ When a POS payment line amount is negative, this module triggers a server-side G
 4. If unsettled (`setlstat` indicates not settled or is missing): `POST /void`.
 5. Otherwise: `POST /refund` with allocated amount.
 6. If refund returns `respcode=28` (`Txn not settled`), the system automatically retries as `POST /void`.
+7. A full refund-to-void retry is permitted only when the refund response is authoritative and non-approved, the requested amount exactly matches a known positive original amount, and inquiry eligibility permits voiding. Approved or transport-failed responses, partial returns, explicit prohibitions, and negative settlement evidence never authorize a second mutation.
 
 Results are written back to the refund `pos.payment` line (`cardpointe_retref`, `cardpointe_respcode`, `cardpointe_resptext`, `cardpointe_operation`, `cardpointe_original_retref`, `cardpointe_ok`).
