@@ -100,8 +100,11 @@ def choose_operation_from_inquire(inquire, amount=None):
 
 def _normalize_result(operation, retref, response, raw=None):
     data = _extract_data(response)
+    # The transport/envelope result is authoritative over nested gateway data.
+    # A failed inquiry or validation rejection must never look approved.
+    envelope_ok = isinstance(response, dict) and response.get('ok') is not False
     return {
-        'ok': _is_approved(response),
+        'ok': envelope_ok and _is_approved(response),
         'operation': operation,
         'respstat': data.get('respstat'),
         'respcode': data.get('respcode'),

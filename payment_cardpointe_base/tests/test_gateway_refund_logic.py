@@ -108,6 +108,29 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertIn('reference', result['message'].lower())
         self.assertEqual([call[0] for call in client.calls], ['inquire'])
 
+    def test_malformed_success_envelope_cannot_look_approved(self):
+        client = _GatewayStub({})
+        client.inquire_response = {
+            'ok': True,
+            'data': {'retref': ['r'], 'respstat': 'A', 'respcode': '000'},
+        }
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertIn('reference', result['message'].lower())
+        self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
+    def test_failed_envelope_cannot_look_approved_from_nested_data(self):
+        client = _GatewayStub({})
+        client.inquire_response = {
+            'ok': False,
+            'message': '401 Unauthorized',
+            'data': {'retref': 'r', 'respstat': 'A', 'respcode': '000'},
+        }
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['message'], '401 Unauthorized')
+        self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
     def test_inquiry_transport_failure_does_not_mutate(self):
         class FailingInquiryClient(_GatewayStub):
             def inquire(self, retref, merchid):
