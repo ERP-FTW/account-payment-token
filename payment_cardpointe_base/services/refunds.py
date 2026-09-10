@@ -44,6 +44,10 @@ def _is_settled_for_refund(resp):
     data = _extract_data(resp)
     text = (data.get('resptext') or '').lower()
     code = str(data.get('respcode') or '')
+    # Negative settlement evidence must win over generic text such as
+    # "Already settled" matching the substring in "Txn not settled".
+    if is_txn_not_settled(resp):
+        return False
     return code in {'12', '400'} or 'settled' in text or 'batched' in text
 
 
@@ -182,6 +186,13 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
         })
 
     refund_result = gw_client.refund(merchid, retref, amount)
+    if (_envelope_is_success(refund_result) and is_txn_not_settled(refund_result)
+            and full_amount and _void_allowed(inquire_data, requested_amount)):
+        void_result = gw_client.void(merchid, retref)
+        return _normalize_result('void', retref, void_result, {
+            'inquire': inquire_data, 'refund': _extract_data(refund_result),
+            'void': _extract_data(void_result), 'orderid': orderid,
+        })
     return _normalize_result('refund', retref, refund_result, {
         'inquire': inquire_data, 'refund': _extract_data(refund_result), 'orderid': orderid,
     })

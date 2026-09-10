@@ -166,6 +166,50 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
 
+    def test_full_refund_code_28_can_fallback_to_void(self):
+        client = _GatewayStub(
+            {'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted', 'voidable': 'Y', 'refundable': 'Y'},
+            refund={'ok': True, 'data': {'respstat': 'D', 'respcode': '28', 'resptext': 'Txn not settled'}},
+        )
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['operation'], 'void')
+        self.assertEqual(client.calls[1], ('refund', 'mid', 'r', '1.00'))
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund', 'void'])
+
+    def test_full_refund_code_28_does_not_fallback_when_voiding_is_forbidden(self):
+        client = _GatewayStub(
+            {'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted', 'voidable': 'N', 'refundable': 'Y'},
+            refund={'ok': True, 'data': {'respstat': 'D', 'respcode': '28', 'resptext': 'Txn not settled'}},
+        )
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['operation'], 'refund')
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
+
+    def test_failed_full_refund_code_28_envelope_does_not_authorize_void(self):
+        client = _GatewayStub(
+            {'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted', 'voidable': 'Y', 'refundable': 'Y'},
+            refund={'ok': False, 'message': 'HTTP 503', 'data': {
+                'respstat': 'D', 'respcode': '28', 'resptext': 'Txn not settled',
+            }},
+        )
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['message'], 'HTTP 503')
+        self.assertEqual(result['operation'], 'refund')
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
+
+    def test_void_not_settled_does_not_fallback_to_refund(self):
+        client = _GatewayStub(
+            {'retref': 'r', 'amount': '1.00', 'setlstat': 'Queued', 'voidable': 'Y', 'refundable': 'Y'},
+            void={'ok': True, 'data': {'respstat': 'D', 'respcode': '28', 'resptext': 'Txn not settled'}},
+        )
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['operation'], 'void')
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'void'])
+
     def test_full_void_failure_can_fallback_to_refund_when_settled(self):
         client = _GatewayStub(
             {'retref': 'r', 'amount': '1.00', 'setlstat': 'Queued', 'voidable': 'Y', 'refundable': 'Y'},
