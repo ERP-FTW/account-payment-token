@@ -131,6 +131,20 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['message'], '401 Unauthorized')
         self.assertEqual([call[0] for call in client.calls], ['inquire'])
 
+    def test_malformed_inquiry_status_fields_do_not_mutate(self):
+        for field, value in (('setlstat', {'state': 'Accepted'}), ('respstat', ['D'])):
+            with self.subTest(field=field):
+                transaction = {
+                    'retref': 'r', 'amount': '1.00', 'voidable': 'Y',
+                    'refundable': 'Y', field: value,
+                }
+                client = _GatewayStub(transaction)
+                result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+                self.assertFalse(result['ok'])
+                self.assertIn('malformed', result['message'].lower())
+                self.assertEqual(result['operation'], 'inquire')
+                self.assertEqual([call[0] for call in client.calls], ['inquire'])
+
     def test_inquiry_transport_failure_does_not_mutate(self):
         class FailingInquiryClient(_GatewayStub):
             def inquire(self, retref, merchid):
@@ -232,6 +246,19 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['message'], 'HTTP 503')
         self.assertEqual(result['operation'], 'void')
         self.assertEqual([call[0] for call in client.calls], ['inquire', 'void'])
+
+    def test_approved_full_refund_is_terminal_even_with_not_settled_text(self):
+        client = _GatewayStub(
+            {'retref': 'r', 'amount': '1.00', 'setlstat': 'Accepted', 'voidable': 'Y', 'refundable': 'Y'},
+            refund={'ok': True, 'data': {
+                'respstat': 'A', 'respcode': '000',
+                'resptext': 'Approved; transaction not settled',
+            }},
+        )
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['operation'], 'refund')
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'refund'])
 
     def test_already_voided_is_not_reported_as_new_success(self):
         client = _GatewayStub({'retref': 'r', 'setlstat': 'Voided'})

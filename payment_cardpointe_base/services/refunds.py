@@ -91,6 +91,24 @@ def _validate_inquiry_transaction(inquire_data, requested_retref):
         return 'CardPointe inquiry returned no transaction reference'
     if not isinstance(requested_retref, str) or inquiry_retref.strip() != requested_retref.strip():
         return 'CardPointe inquiry transaction reference does not match the requested reference'
+
+    # These fields control financial routing.  Reject structured values before
+    # string coercion can make malformed gateway data look like a valid status.
+    string_fields = ('setlstat', 'respstat', 'resptext')
+    for field in string_fields:
+        value = inquire_data.get(field)
+        if value is not None and not isinstance(value, str):
+            return f'CardPointe inquiry returned malformed {field}'
+    respcode = inquire_data.get('respcode')
+    if respcode is not None and not isinstance(respcode, (str, int)):
+        return 'CardPointe inquiry returned malformed respcode'
+    amount = inquire_data.get('amount')
+    if amount is not None and (isinstance(amount, bool) or not isinstance(amount, (str, int, float, Decimal))):
+        return 'CardPointe inquiry returned malformed amount'
+    for field in ('voidable', 'refundable'):
+        value = inquire_data.get(field)
+        if value is not None and (isinstance(value, (dict, list, tuple, set))):
+            return f'CardPointe inquiry returned malformed {field}'
     return None
 
 
@@ -186,7 +204,8 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
         })
 
     refund_result = gw_client.refund(merchid, retref, amount)
-    if (_envelope_is_success(refund_result) and is_txn_not_settled(refund_result)
+    if (_envelope_is_success(refund_result) and not _is_approved(refund_result)
+            and is_txn_not_settled(refund_result)
             and full_amount and _void_allowed(inquire_data, requested_amount)):
         void_result = gw_client.void(merchid, retref)
         return _normalize_result('void', retref, void_result, {
