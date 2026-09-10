@@ -98,11 +98,16 @@ def choose_operation_from_inquire(inquire, amount=None):
     return 'refund' if settle_status in _SETTLED_VALUES else 'void'
 
 
+def _envelope_is_success(response):
+    """Return whether the gateway transport/envelope authorizes interpretation."""
+    return isinstance(response, dict) and response.get('ok') is not False
+
+
 def _normalize_result(operation, retref, response, raw=None):
     data = _extract_data(response)
     # The transport/envelope result is authoritative over nested gateway data.
     # A failed inquiry or validation rejection must never look approved.
-    envelope_ok = isinstance(response, dict) and response.get('ok') is not False
+    envelope_ok = _envelope_is_success(response)
     return {
         'ok': envelope_ok and _is_approved(response),
         'operation': operation,
@@ -164,7 +169,8 @@ def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
 
     if operation == 'void':
         void_result = gw_client.void(merchid, retref)
-        if (not _is_approved(void_result) and full_amount and _void_allowed(inquire_data, requested_amount)
+        if (_envelope_is_success(void_result) and not _is_approved(void_result)
+                and full_amount and _void_allowed(inquire_data, requested_amount)
                 and _is_settled_for_refund(void_result) and _refund_allowed(inquire_data)):
             refund_result = gw_client.refund(merchid, retref, amount)
             return _normalize_result('refund', retref, refund_result, {

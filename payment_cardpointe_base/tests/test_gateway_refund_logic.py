@@ -176,6 +176,19 @@ class TestGatewayRefundDecision(unittest.TestCase):
         self.assertEqual(result['operation'], 'refund')
         self.assertEqual([call[0] for call in client.calls], ['inquire', 'void', 'refund'])
 
+    def test_failed_void_envelope_never_authorizes_refund_fallback(self):
+        client = _GatewayStub(
+            {'retref': 'r', 'amount': '1.00', 'setlstat': 'Queued', 'voidable': 'Y', 'refundable': 'Y'},
+            void={'ok': False, 'message': 'HTTP 503', 'data': {
+                'respstat': 'D', 'respcode': '12', 'resptext': 'Already settled',
+            }},
+        )
+        result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['message'], 'HTTP 503')
+        self.assertEqual(result['operation'], 'void')
+        self.assertEqual([call[0] for call in client.calls], ['inquire', 'void'])
+
     def test_already_voided_is_not_reported_as_new_success(self):
         client = _GatewayStub({'retref': 'r', 'setlstat': 'Voided'})
         result = refunds.execute_void_or_refund(client, 'mid', 'r', '1.00')
