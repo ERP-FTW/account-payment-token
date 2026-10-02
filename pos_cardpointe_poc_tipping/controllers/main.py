@@ -172,6 +172,7 @@ class PosCardPointeTippingController(PosCardPointeController):
                 'message': result.get('message') or result.get('resptext') or 'Terminal payment failed.',
                 'respcode': result.get('respcode'),
                 'resptext': result.get('resptext'),
+                'terminal_order_id': terminal_order_id,
             }
         finally:
             disconnect_result = terminal_client.disconnect(session_key) if session_key else {'ok': True}
