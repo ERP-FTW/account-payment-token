@@ -42,6 +42,14 @@ class CardPointeGatewayClient:
         return f"{self.base_url}/{path.lstrip('/')}"
 
     def _request(self, method, path, payload=None, timeout=30):
+        if not self.config.gateway_username or not self.config.gateway_password:
+            # Nothing was sent: this is a configuration gap, never an unknown outcome.
+            return {
+                'ok': False,
+                'data': {},
+                'message': 'CardPointe Gateway credentials are not set on the merchant configuration.',
+                'error_code': 'credentials_missing',
+            }
         url = self._url(path)
         headers = {'Accept': 'application/json'}
         if payload is not None:

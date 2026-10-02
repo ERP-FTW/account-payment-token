@@ -114,3 +114,29 @@ class TestCardPointeTerminalRecovery(TestPointOfSaleHttpCommon):
         call = self.fake.paths('cardconnect/rest/')[-1]
         self.assertEqual(call['method'], 'PUT')
         self.assertEqual(call['json'], {'merchid': '496160873888'})
+
+
+@tagged('post_install', '-at_install', 'cardpointe')
+class TestCardPointeCredentialsAfterCreation(TestPointOfSaleHttpCommon):
+    """A configuration package creates the records; an operator adds the secrets later."""
+
+    def test_records_can_be_created_without_secrets_and_refuse_to_call_out(self):
+        fake = FakeCardPointe()
+        fake.patch_transport(self)
+        company = self.main_pos_config.company_id
+        merchant = self.env['cardpointe.merchant.config'].create({
+            'name': 'Packaged merchant', 'company_id': company.id, 'mid': '800000009875',
+            'gateway_base_url': 'https://fts-uat.cardconnect.com/cardconnect/rest/',
+        })
+        terminal = self.env['pos.cardpointe.terminal.config'].create({
+            'name': 'Packaged terminal', 'company_id': company.id, 'merchant_config_id': merchant.id,
+            'device_serial': 'C047UG43720996',
+        })
+        from odoo.addons.payment_cardpointe_base.services.gateway import CardPointeGatewayClient
+        from odoo.addons.pos_cardpointe_poc.services.cardpointe_terminal import CardPointeTerminalClient
+        self.assertEqual(CardPointeGatewayClient(merchant).inquire('R', 'M')['error_code'], 'credentials_missing')
+        self.assertFalse(CardPointeTerminalClient(terminal).connect()['ok'])
+        self.assertFalse(fake.calls, "nothing may be sent without credentials")
+        merchant.write({'gateway_username': 'testing', 'gateway_password': 'testing-SECRET'})
+        terminal.write({'auth_key': 'terminal-key-SECRET'})
+        self.assertTrue(CardPointeTerminalClient(terminal).connect()['ok'])

@@ -18,7 +18,8 @@ class CardPointeTerminalConfig(models.Model):
     base_url = fields.Char(default='https://bolt-uat.cardpointe.com/api', required=True)
     merchant_config_id = fields.Many2one('cardpointe.merchant.config', required=True, check_company=True)
     merchant_id = fields.Char(related='merchant_config_id.mid', store=True, readonly=True)
-    auth_key = fields.Char(required=True)
+    # Entered by an authorized operator after the record exists (see merchant credentials).
+    auth_key = fields.Char(help='Integrated Terminal API authorization key. Required before any terminal call.')
     device_type = fields.Selection(
         [
             ('clover_pocket', 'Clover Pocket'),
