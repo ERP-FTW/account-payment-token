@@ -6,7 +6,10 @@ from odoo.exceptions import UserError
 from . import cardpointe_client
 
 
-ENDPOINT_TEST_CONNECTION = None  # TODO: set ENDPOINT_TEST_CONNECTION per Gateway API docs.
+# CardPointe documents credential validation as a PUT to the REST base URL with the merchant id in
+# the body; the Gateway checks the MID against the credentials and answers "CardConnect REST Servlet".
+ENDPOINT_TEST_CONNECTION = ''
+TEST_CONNECTION_MARKER = 'cardconnect rest servlet'
 
 
 class PaymentProvider(models.Model):
@@ -105,15 +108,20 @@ class PaymentProvider(models.Model):
         self.ensure_one()
         if self.code != 'cardpointe':
             return
-        endpoint = self.cardpointe_test_endpoint or ENDPOINT_TEST_CONNECTION
-        if not endpoint:
-            raise UserError(_(
-                "CardPointe: no test endpoint configured. "
-                "Please set the Test Connection Endpoint or ENDPOINT_TEST_CONNECTION "
-                "according to docs/ENDPOINTS.md"
-            ))
-
-        response = self._cardpointe_request('GET', endpoint)
+        if self.cardpointe_test_endpoint:
+            # Legacy override: a GET to an operator-supplied relative endpoint.
+            response = self._cardpointe_request('GET', self.cardpointe_test_endpoint)
+        else:
+            if not self.cardpointe_mid:
+                raise UserError(_("CardPointe: set the merchant id (MID) before testing the connection."))
+            response = self._cardpointe_request(
+                'PUT', ENDPOINT_TEST_CONNECTION, payload={'merchid': self.cardpointe_mid},
+            )
+            if response['ok'] and TEST_CONNECTION_MARKER not in (response.get('text') or '').lower():
+                response = dict(
+                    response, ok=False,
+                    error_message=_("The URL answered, but not as the CardPointe REST Gateway."),
+                )
         if response['ok']:
             message = _(
                 "CardPointe connection OK. Base URL: %(base)s MID: %(mid)s",

@@ -87,6 +87,8 @@ class CardPointeTerminalClient:
                 'ok': False,
                 'status': status,
                 'message': 'Terminal request timed out.' if status == 'timeout' else message,
+                # No HTTP answer: the request may still have reached the terminal.
+                'transport_error': True,
             }
 
         _logger.info(

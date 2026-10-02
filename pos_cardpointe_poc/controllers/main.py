@@ -11,6 +11,7 @@ from odoo.addons.payment_cardpointe_base.services.gateway import CardPointeGatew
 from odoo.addons.payment_cardpointe_base.services.money import format_gateway_amount
 
 from ..services.cardpointe_terminal import CardPointeTerminalClient
+from ..services.terminal_recovery import new_terminal_order_id, resolve_terminal_outcome
 from ..services.signature_policy import (
     amount_meets_threshold,
     emv_indicates_signature_applicable,
@@ -31,14 +32,37 @@ class PosCardPointeController(http.Controller):
         if pos_config.company_id not in request.env.user.company_ids:
             return None, None, {'status': 'error', 'message': 'Access denied for this POS config.'}
 
+        payment_method, config, error = self._validate_payment_method(payment_method_id)
+        if error:
+            return None, None, error
+        if payment_method.company_id and payment_method.company_id != pos_config.company_id:
+            return None, None, {'status': 'error', 'message': 'Payment method belongs to another company.'}
+        return payment_method, config, None
+
+    def _validate_payment_method(self, payment_method_id):
+        """Check that the caller may take CardPointe payments with this method.
+
+        The payment method, its terminal configuration and the terminal's merchant configuration
+        must all belong to one company the caller works in.
+        """
+        if not request.env.user.has_group('point_of_sale.group_pos_user'):
+            return None, None, {'status': 'error', 'message': 'Access denied.'}
         payment_method = request.env['pos.payment.method'].browse(int(payment_method_id)).exists()
         if not payment_method or payment_method.use_payment_terminal != 'cardpointe_poc':
             return None, None, {'status': 'error', 'message': 'Invalid payment method.'}
+        company = payment_method.company_id
+        if company and company not in request.env.user.company_ids:
+            return None, None, {'status': 'error', 'message': 'Access denied for this payment method.'}
 
         config = payment_method.cardpointe_config_id
         if not config:
             return None, None, {'status': 'error', 'message': 'CardPointe config missing on payment method.'}
-
+        merchant = config.sudo().merchant_config_id
+        if company and (config.company_id != company or (merchant and merchant.company_id != company)):
+            return None, None, {
+                'status': 'error',
+                'message': 'CardPointe terminal or merchant configuration belongs to another company.',
+            }
         return payment_method, config, None
 
     def _signature_required_pre_auth(self, config, amount_dollars):
@@ -67,7 +91,7 @@ class PosCardPointeController(http.Controller):
         return merchant_config
 
     def _attach_signature_sigcap(self, terminal_config, retref, signature_blob):
-        merchant_config = self._resolve_merchant_config(terminal_config)
+        merchant_config = self._resolve_merchant_config(terminal_config).sudo()
         if not merchant_config or not merchant_config.gateway_username or not merchant_config.gateway_password:
             return {'ok': False, 'message': 'CardPointe gateway credentials are missing on merchant config for sigcap.'}
         gateway = CardPointeGatewayClient(merchant_config)
@@ -119,7 +143,7 @@ class PosCardPointeController(http.Controller):
         if not token:
             return {'status': 'error', 'message': 'Missing CardPointe token for manual entry.'}
 
-        merchant_config = self._resolve_merchant_config(config)
+        merchant_config = self._resolve_merchant_config(config).sudo()
         if not merchant_config:
             return {'status': 'error', 'message': 'CardPointe merchant config missing on terminal config.'}
         if not merchant_config.gateway_username or not merchant_config.gateway_password:
@@ -223,6 +247,9 @@ class PosCardPointeController(http.Controller):
         _payment_method, config, error = self._validate_start_payload(pos_config_id, payment_method_id)
         if error:
             return error
+        # The runtime lock lives on the terminal configuration, which cashiers may read but not
+        # write: maintain it as superuser once the caller has been authorized above.
+        config = config.sudo()
 
         if (
             config.cardpointe_active_request_state in ('ready', 'auth_started', 'cancel_requested')
@@ -266,8 +293,10 @@ class PosCardPointeController(http.Controller):
             }
 
         request_id = str(uuid.uuid4())
+        terminal_order_id = new_terminal_order_id()
         config.write({
             'cardpointe_active_request_id': request_id,
+            'cardpointe_active_terminal_order_id': terminal_order_id,
             'cardpointe_active_session_key': connect_result['session_key'],
             'cardpointe_active_request_state': 'ready',
             'cardpointe_active_request_uid': request.env.user.id,
@@ -286,7 +315,7 @@ class PosCardPointeController(http.Controller):
             diag['pid'],
             diag['thread_id'],
         )
-        return {'status': 'ready', 'request_id': request_id}
+        return {'status': 'ready', 'request_id': request_id, 'terminal_order_id': terminal_order_id}
 
     @http.route('/pos_cardpointe_poc/auth', type='json', auth='user')
     def auth(self, request_id, amount=None):
@@ -322,13 +351,19 @@ class PosCardPointeController(http.Controller):
         terminal_client = CardPointeTerminalClient(config)
 
         signature_required_pre_auth = self._signature_required_pre_auth(config, amount)
+        terminal_order_id = self._terminal_order_id(config)
         try:
-            result = terminal_client.auth_card_with_session(
-                amount_dollars=amount,
-                order_id=config.cardpointe_active_order_uid,
-                session_key=session_key,
-                include_signature=signature_required_pre_auth,
-            )
+            try:
+                result = terminal_client.auth_card_with_session(
+                    amount_dollars=amount,
+                    order_id=terminal_order_id,
+                    session_key=session_key,
+                    include_signature=signature_required_pre_auth,
+                )
+            except Exception as exc:  # noqa: BLE001 - the request may have reached the terminal
+                _logger.exception('CardPointe authCard raised request_id=%s order_id=%s', request_id, terminal_order_id)
+                result = {'ok': False, 'status': 'timeout', 'message': str(exc)}
+            result = self._resolve_if_unknown(config, result, terminal_order_id, amount)
 
             signature_required = signature_required_pre_auth
             signature_captured = bool(result.get('signature_captured_inline')) if signature_required_pre_auth else False
@@ -375,6 +410,8 @@ class PosCardPointeController(http.Controller):
                     'signature_required': signature_required,
                     'signature_captured': signature_captured,
                     'signature_method': signature_method,
+                    'terminal_order_id': terminal_order_id,
+                    'recovered': bool(result.get('recovered')),
                 }
 
             return {
@@ -382,6 +419,7 @@ class PosCardPointeController(http.Controller):
                 'message': result.get('message') or result.get('resptext') or 'Terminal payment failed.',
                 'respcode': result.get('respcode'),
                 'resptext': result.get('resptext'),
+                'terminal_order_id': terminal_order_id,
             }
         finally:
             disconnect_result = terminal_client.disconnect(session_key) if session_key else {'ok': True}
@@ -451,9 +489,9 @@ class PosCardPointeController(http.Controller):
 
     @http.route('/pos_cardpointe_poc/refund', type='json', auth='user')
     def refund(self, payment_method_id, amount, refunded_orderline_ids):
-        payment_method = request.env['pos.payment.method'].browse(int(payment_method_id)).exists()
-        if not payment_method or payment_method.use_payment_terminal != 'cardpointe_poc':
-            return {'status': 'error', 'message': 'Invalid payment method.'}
+        payment_method, _config, error = self._validate_payment_method(payment_method_id)
+        if error:
+            return error
 
         try:
             result = request.env['pos.payment'].cardpointe_process_refund(
@@ -476,9 +514,84 @@ class PosCardPointeController(http.Controller):
             'ok': result.get('ok', result.get('status') == 'approved'),
         }
 
+    # --- Unknown terminal outcomes -------------------------------------------------------------
+
+    @staticmethod
+    def _terminal_order_id(config):
+        return config.cardpointe_active_terminal_order_id or config.cardpointe_active_order_uid
+
+    @staticmethod
+    def _needs_resolution(result):
+        """True when the terminal call may have charged the card without telling us."""
+        # `timeout` covers a read timeout and a 5xx from the terminal service; a transport error
+        # means no HTTP answer at all. In each case the authorization may have gone through.
+        return result.get('status') == 'timeout' or bool(result.get('transport_error'))
+
+    def _resolve_if_unknown(self, terminal_config, result, terminal_order_id, amount):
+        if not self._needs_resolution(result):
+            return result
+        _logger.warning(
+            'CardPointe authCard outcome unknown order_id=%s status=%s; inquiring by order id',
+            terminal_order_id, result.get('status'),
+        )
+        return self._resolve_terminal_order(terminal_config, terminal_order_id, amount)
+
+    def _resolve_terminal_order(self, terminal_config, terminal_order_id, amount):
+        """Resolve through the Gateway's documented inquiry by order id. Never charges."""
+        merchant_config = self._resolve_merchant_config(terminal_config).sudo()
+        if not merchant_config or not merchant_config.gateway_username or not merchant_config.gateway_password:
+            return {
+                'status': 'unknown',
+                'message': 'Payment outcome unknown and CardPointe gateway credentials are missing; '
+                           'check CardPointe reporting before taking another payment.',
+            }
+        outcome = resolve_terminal_outcome(
+            CardPointeGatewayClient(merchant_config), merchant_config.mid, terminal_order_id, amount,
+        )
+        status = outcome.get('status')
+        if status == 'approved':
+            if not outcome.get('amount_matches'):
+                _logger.warning('CardPointe recovered approval amount differs order_id=%s amount=%s requested=%s',
+                                terminal_order_id, outcome.get('amount'), amount)
+            return dict(outcome, ok=True)
+        if status in ('not_found', 'voided'):
+            return {
+                'ok': False,
+                'status': 'error',
+                'message': 'The terminal did not complete the payment and no charge stands '
+                           f'(CardPointe: {status}). You can take the payment again.',
+                'resolution': status,
+            }
+        if status == 'declined':
+            return {
+                'ok': False, 'status': 'declined', 'message': outcome.get('message') or 'Declined.',
+                'respcode': outcome.get('respcode'), 'resptext': outcome.get('resptext'),
+            }
+        return {
+            'ok': False,
+            'status': 'unknown',
+            'message': 'Payment outcome unknown: the card may have been charged. Do not take another '
+                       'payment for this line; use "Check status" once the terminal and gateway are reachable.',
+        }
+
+    @http.route('/pos_cardpointe_poc/inquire', type='json', auth='user')
+    def inquire(self, payment_method_id, terminal_order_id, amount=None):
+        """Resolve a payment line left in the unknown state, without charging."""
+        _payment_method, config, error = self._validate_payment_method(payment_method_id)
+        if error:
+            return error
+        if not terminal_order_id:
+            return {'status': 'error', 'message': 'Missing terminal order id.'}
+        result = self._resolve_terminal_order(config, terminal_order_id, amount)
+        result['terminal_order_id'] = terminal_order_id
+        result.pop('ok', None)
+        return result
+
     @http.route('/pos_cardpointe_poc/poll', type='json', auth='user')
-    def poll(self, payment_method_id, request_id):
+    def poll(self, payment_method_id, request_id=None, terminal_order_id=None, amount=None):
+        if terminal_order_id:
+            return self.inquire(payment_method_id, terminal_order_id, amount)
         return {
             'status': 'error',
-            'message': 'Not implemented for authCard flow.',
+            'message': 'Provide the terminal order id of the payment to resolve.',
         }

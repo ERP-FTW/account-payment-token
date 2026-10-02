@@ -101,10 +101,32 @@ class CardPointeGatewayClient:
             'http_status': status_code,
             'data': data,
             'headers': response_headers,
+            'text': safe_truncate(text, limit=200),
         }
 
     def inquire(self, retref, merchid):
         return self._request('GET', f"inquire/{retref}/{merchid}", timeout=20)
+
+    def inquire_by_orderid(self, orderid, merchid):
+        """Look a transaction up by the order id sent with the original authorization.
+
+        Documented by CardPointe for an authorization that was interrupted before a response came
+        back. `set=1` restricts the search to this merchant id.
+        """
+        return self._request('GET', f"inquireByOrderid/{orderid}/{merchid}/1", timeout=20)
+
+    def test_credentials(self, merchid):
+        """Validate the API credentials against the merchant id.
+
+        CardPointe documents a PUT to the REST base URL with the merchant id in the body: the
+        Gateway checks that the MID matches the credentials and answers "CardConnect REST Servlet".
+        Nothing is authorized or charged.
+        """
+        result = self._request('PUT', '', payload={'merchid': merchid}, timeout=20)
+        result['ok'] = bool(
+            result.get('ok') and 'cardconnect rest servlet' in (result.get('text') or '').lower()
+        )
+        return result
 
     def void(self, merchid, retref):
         return self._request('POST', 'void', payload={'merchid': merchid, 'retref': retref}, timeout=30)

@@ -1,4 +1,6 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
+
+from odoo.addons.payment_cardpointe_base.services.gateway import CardPointeGatewayClient
 
 
 class CardPointeMerchantConfig(models.Model):
@@ -33,3 +35,25 @@ class CardPointeMerchantConfig(models.Model):
         if vals.get('gateway_base_url'):
             vals['gateway_base_url'] = self._normalize_base_url(vals['gateway_base_url'])
         return super().write(vals)
+
+    def action_test_credentials(self):
+        """Validate the Gateway credentials against this MID. Nothing is authorized or charged."""
+        self.ensure_one()
+        result = CardPointeGatewayClient(self.sudo()).test_credentials(self.mid)
+        if result.get('ok'):
+            message = _("CardPointe accepted the credentials for MID %(mid)s at %(url)s.",
+                        mid=self.mid, url=self.gateway_base_url)
+        else:
+            message = _("CardPointe did not accept the credentials (HTTP %(status)s): %(detail)s",
+                        status=result.get('http_status') or '-',
+                        detail=(result.get('message') or result.get('text') or '')[:200])
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _("CardPointe Credentials"),
+                'message': message,
+                'type': 'success' if result.get('ok') else 'danger',
+                'sticky': False,
+            },
+        }

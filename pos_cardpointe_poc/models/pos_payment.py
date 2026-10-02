@@ -74,6 +74,10 @@ class PosPayment(models.Model):
     cardpointe_request_started_at = fields.Datetime(copy=False)
     cardpointe_request_order_uid = fields.Char(copy=False, index=True)
     cardpointe_request_payment_line_uuid = fields.Char(copy=False, index=True)
+    cardpointe_terminal_order_id = fields.Char(
+        copy=False, index=True,
+        help='orderId sent to the terminal; the key for the Gateway inquiry by order id.',
+    )
 
     cardpointe_capture_method = fields.Selection([
         ('terminal', 'Terminal'),
@@ -128,6 +132,7 @@ class PosPayment(models.Model):
             'cardpointe_request_started_at',
             'cardpointe_request_order_uid',
             'cardpointe_request_payment_line_uuid',
+            'cardpointe_terminal_order_id',
         ]
         return list(dict.fromkeys(fields_list))
 
@@ -168,9 +173,16 @@ class PosPayment(models.Model):
         config = payment_method.cardpointe_config_id
         if not config:
             raise UserError(_('CardPointe config missing on payment method.'))
+        company = payment_method.company_id
+        if company and company not in self.env.user.company_ids:
+            raise UserError(_('You cannot refund with a payment method of another company.'))
         merchant_config = self._cardpointe_get_merchant_config(config)
         if not merchant_config:
             raise UserError(_('CardPointe merchant config missing on terminal config.'))
+        if company and (config.company_id != company or merchant_config.company_id != company):
+            raise UserError(_('CardPointe terminal or merchant configuration belongs to another company.'))
+        # Credentials are system-only fields: read them only after the checks above.
+        merchant_config = merchant_config.sudo()
         if not merchant_config.gateway_username or not merchant_config.gateway_password:
             raise UserError(_('CardPointe gateway credentials are missing on merchant config.'))
 
@@ -193,6 +205,13 @@ class PosPayment(models.Model):
                 amount=format_gateway_amount(allocation['amount']),
                 orderid=allocation.get('order_uid'),
             )
+            if result.get('unknown'):
+                # The void/refund request got no answer: it may have been applied. Never retry blindly.
+                raise UserError(_(
+                    'CardPointe did not answer the %(operation)s for reference %(retref)s, so its outcome is '
+                    'unknown. Do not retry: check the transaction in CardPointe reporting first.',
+                    operation=result.get('operation'), retref=allocation['retref'],
+                ))
             if not result.get('ok'):
                 message = result.get('resptext') or result.get('message') or _('CardPointe refund failed.')
                 lowered = (message or '').lower()
@@ -232,9 +251,14 @@ class PosPayment(models.Model):
             raise UserError(_('No refunded order lines were found. Please refund from a paid ticket.'))
 
         lines = self.env['pos.order.line'].browse(refunded_orderline_ids).exists()
-        original_order_ids = lines.mapped('order_id').ids
-        if not original_order_ids:
+        original_orders = lines.mapped('order_id')
+        if not original_orders:
             raise UserError(_('Original order for refund could not be determined.'))
+        if payment_method.company_id and any(
+            order.company_id != payment_method.company_id for order in original_orders
+        ):
+            raise UserError(_('The refunded order belongs to another company.'))
+        original_order_ids = original_orders.ids
 
         original_payments = self.search([
             ('pos_order_id', 'in', original_order_ids),
