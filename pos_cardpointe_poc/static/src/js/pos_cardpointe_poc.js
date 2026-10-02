@@ -112,6 +112,13 @@ export class CardPointePOC extends PaymentInterface {
     }
 
     async _send_refund_request(order, line) {
+        if (line.cardpointe_status === "unknown") {
+            // The previous attempt may have returned the money: never send it again from this line.
+            this._showError(
+                _t("This return's outcome is unknown, so it is not sent again. Check CardPointe reporting; a POS manager clears the hold on the original payment before another return of this sale.")
+            );
+            return false;
+        }
         const refundedOrderLineIds = order.lines
             .filter((orderLine) => orderLine.refunded_orderline_id)
             .map((orderLine) => orderLine.refunded_orderline_id.id || orderLine.refunded_orderline_id);
@@ -136,11 +143,18 @@ export class CardPointePOC extends PaymentInterface {
                 { silent: true }
             );
         } catch {
-            this._showError(_t("Could not reach Odoo server during CardPointe refund."));
-            line.set_payment_status("retry");
+            // Odoo may have sent the void/refund before the connection dropped.
+            this._markRefundUnknown(
+                line,
+                _t("Odoo did not answer during the CardPointe return, so its outcome is unknown. Check CardPointe reporting before returning this sale again.")
+            );
             return false;
         }
 
+        if (result.status === "unknown") {
+            this._markRefundUnknown(line, result.message);
+            return false;
+        }
         if (result.status !== "approved") {
             this._handleFailedResult(line, result);
             return false;
@@ -200,6 +214,13 @@ export class CardPointePOC extends PaymentInterface {
             return false;
         }
         return true;
+    }
+
+    _markRefundUnknown(line, message) {
+        line.cardpointe_status = "unknown";
+        line.cardpointe_ok = false;
+        line.set_payment_status("retry");
+        this._showError(message || _t("This return's outcome is unknown. Check CardPointe reporting."));
     }
 
     _markUnknown(line, result) {

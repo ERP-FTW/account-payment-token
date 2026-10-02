@@ -420,6 +420,7 @@ class PosCardPointeController(http.Controller):
                 'respcode': result.get('respcode'),
                 'resptext': result.get('resptext'),
                 'terminal_order_id': terminal_order_id,
+                'resolution': result.get('resolution'),
             }
         finally:
             disconnect_result = terminal_client.disconnect(session_key) if session_key else {'ok': True}
@@ -506,6 +507,7 @@ class PosCardPointeController(http.Controller):
 
         return {
             'status': result.get('status', 'error'),
+            'message': result.get('message'),
             'retref': result.get('retref'),
             'respcode': result.get('respcode'),
             'resptext': result.get('resptext'),
@@ -549,10 +551,23 @@ class PosCardPointeController(http.Controller):
             CardPointeGatewayClient(merchant_config), merchant_config.mid, terminal_order_id, amount,
         )
         status = outcome.get('status')
+        if status == 'approved' and not outcome.get('amount_matches'):
+            # A charge stands, but not for this line's amount: accepting it would under- or overpay the
+            # order. Keep the line unresolved until the charge is reconciled in CardPointe.
+            _logger.warning('CardPointe recovered approval amount differs order_id=%s amount=%s requested=%s',
+                            terminal_order_id, outcome.get('amount'), amount)
+            return {
+                'ok': False,
+                'status': 'unknown',
+                'resolution': 'amount_mismatch',
+                'retref': outcome.get('retref'),
+                'amount': outcome.get('amount'),
+                'message': f"CardPointe shows an approval of {outcome.get('amount')} (reference "
+                           f"{outcome.get('retref')}) for this payment, but {amount} was requested. Do not take "
+                           'another payment for this line: void or adjust that charge in CardPointe first, then '
+                           'press Send to check again.',
+            }
         if status == 'approved':
-            if not outcome.get('amount_matches'):
-                _logger.warning('CardPointe recovered approval amount differs order_id=%s amount=%s requested=%s',
-                                terminal_order_id, outcome.get('amount'), amount)
             return dict(outcome, ok=True)
         if status in ('not_found', 'voided'):
             return {

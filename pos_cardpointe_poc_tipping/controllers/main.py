@@ -173,6 +173,7 @@ class PosCardPointeTippingController(PosCardPointeController):
                 'respcode': result.get('respcode'),
                 'resptext': result.get('resptext'),
                 'terminal_order_id': terminal_order_id,
+                'resolution': result.get('resolution'),
             }
         finally:
             disconnect_result = terminal_client.disconnect(session_key) if session_key else {'ok': True}

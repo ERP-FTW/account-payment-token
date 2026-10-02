@@ -24,9 +24,11 @@ class FakeCardPointe:
         self.auth_card_error = None          # e.g. CardPointeRequestError('timeout')
         self.inquire_by_orderid = None       # dict/list answer, or an exception instance
         self.inquire = {}
+        self.inquire_retref_from_path = False  # answer each inquire/<retref> with that retref
         self.void = {'respstat': 'A', 'respcode': '000', 'resptext': 'Approval', 'authcode': 'REVERS'}
         self.refund = {'respstat': 'A', 'respcode': '000', 'resptext': 'Approval', 'retref': 'REFUND-1'}
         self.refund_error = None
+        self.refund_answers = []             # consumed in order before falling back to `refund`
 
     def __call__(self, method, url, headers=None, json=None, timeout=30, verify=True, auth=None):
         path = url.split('://', 1)[-1].split('/', 1)[-1]
@@ -48,12 +50,17 @@ class FakeCardPointe:
                                      'resptext': 'Txn not found'}
             return 200, {}, '', answer
         if '/inquire/' in url:
-            return 200, {}, '', dict(self.inquire)
+            answer = dict(self.inquire)
+            if self.inquire_retref_from_path:
+                answer['retref'] = url.split('/inquire/', 1)[1].split('/', 1)[0]
+            return 200, {}, '', answer
         if path.endswith('rest/void'):
             return 200, {}, '', dict(self.void)
         if path.endswith('rest/refund'):
             if self.refund_error:
                 raise self.refund_error
+            if self.refund_answers:
+                return 200, {}, '', dict(self.refund_answers.pop(0))
             return 200, {}, '', dict(self.refund)
         if path.endswith('cardconnect/rest/') and method == 'PUT':
             return 200, {}, '<html><body><h1>CardConnect REST Servlet</h1></body></html>', None

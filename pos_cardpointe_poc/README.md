@@ -24,9 +24,11 @@ acceptance below is still required.
    - approved → the line stores `retref`, `authcode`, the approved amount and the terminal order id;
    - declined / cancelled / terminal in use / merchant mode → reported as such, nothing to resolve;
    - **unknown** (timeout, 5xx, dropped connection, exception) → the server immediately asks the
-     Gateway `inquireByOrderid` for that terminal order id: an approval found is recorded as the
-     sale (never charged again); *Txn not found* or a voided authorization means no charge stands
-     and the cashier may retry; anything else stays **unknown**.
+     Gateway `inquireByOrderid` for that terminal order id: an approval for the line's amount is
+     recorded as the sale (never charged again); *Txn not found* or a voided authorization means
+     no charge stands and the cashier may retry; an approval for a **different amount** (for
+     example a tip chosen during the lost call) and anything else stay **unknown** — void or
+     adjust that charge in CardPointe, then press Send to check again.
 4. An **unknown** line blocks a new charge and manual entry. Pressing Send again calls
    `/pos_cardpointe_poc/inquire` (also reachable as `/poll` with the terminal order id), which
    resolves it the same way without charging.
@@ -43,8 +45,16 @@ checks; the refunded order must belong to the method's company). The original sa
 refunded lines are allocated the return amount, and each allocation goes through
 `payment_cardpointe_base` `execute_void_or_refund` (see its README): the inquiry comes first; a
 partial return is an exact refund and never a void; a full unsettled return voids; an unanswered
-void/refund is reported as an unknown outcome not to be retried. If one of several allocations
-fails, the ones already sent are not rolled back at CardPointe — check the response text.
+void/refund is reported as an unknown outcome not to be retried.
+
+**Return hold.** When a void/refund gets no answer, or a return spread over several sale payments
+stops after one of them was already returned, the route answers `unknown` (the POS keeps the line
+unknown and never resends it) and stamps a hold on each sale payment involved
+(field `cardpointe_refund_hold`, with the time and the references). Any further return of that
+sale is refused until a POS manager has checked CardPointe reporting and pressed **Clear CardPointe
+return hold** on the original payment (Point of Sale → Orders → Payments). A failure before any
+money moved stays an ordinary, retryable error. If Odoo itself does not answer the POS during a
+return, the POS line becomes unknown too; check reporting before returning that sale again.
 
 ## Configuration
 
@@ -72,6 +82,8 @@ Create the records with the reviewed configuration packages (Guild skill `odoo-c
    becomes unknown or is resolved through `inquireByOrderid`; no second charge exists in reporting.
 5. Partial return before settlement fails with *Txn not settled* and moves nothing; after
    settlement it refunds exactly the returned amount; a full return before settlement voids.
+   Interrupt the Gateway during a return: the line becomes unknown, the sale payment shows the
+   return hold, and a second return is refused until a manager clears it.
 6. Confirm the Gateway accepts the module's `POST` for void/refund/auth (the docs show `PUT`).
 
 Record Odoo records and CardPointe reporting side by side; mark which runs reached UAT.

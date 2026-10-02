@@ -74,6 +74,23 @@ class TestCardPointeTerminalRecovery(TestPointOfSaleHttpCommon):
         inquiry = self.fake.paths('inquireByOrderid')[0]['path']
         self.assertIn(started['terminal_order_id'], inquiry)
 
+    def test_recovered_approval_for_another_amount_stays_unresolved(self):
+        self.fake.auth_card_error = TIMEOUT
+        self.fake.inquire_by_orderid = {'respstat': 'A', 'respcode': '00', 'resptext': 'Approval',
+                                        'retref': 'RECOVERED-2', 'authcode': 'Z8', 'amount': '24.50',
+                                        'setlstat': 'Queued for Capture'}
+        started, result = self._pay(42.5)
+        self.assertEqual(result['status'], 'unknown', result)
+        self.assertEqual(result['resolution'], 'amount_mismatch')
+        self.assertIn('RECOVERED-2', result['message'])
+        self.assertEqual(result['terminal_order_id'], started['terminal_order_id'])
+        resolved = self.make_jsonrpc_request('/pos_cardpointe_poc/inquire', {
+            'payment_method_id': self.cardpointe_pm.id,
+            'terminal_order_id': started['terminal_order_id'], 'amount': 42.5,
+        })
+        self.assertEqual(resolved['status'], 'unknown')
+        self.assertEqual(len(self.fake.paths('v4/authCard')), 1, "never a second charge")
+
     def test_timeout_with_no_transaction_lets_the_cashier_retry(self):
         self.fake.auth_card_error = TIMEOUT
         self.fake.inquire_by_orderid = None  # "Txn not found"

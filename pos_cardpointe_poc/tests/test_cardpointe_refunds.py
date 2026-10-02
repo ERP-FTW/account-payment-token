@@ -94,12 +94,59 @@ class TestCardPointeRefunds(TestPoSCommon):
         self.assertFalse(self.fake.paths('rest/void'))
         self.assertFalse(self.fake.paths('rest/refund'))
 
-    def test_unanswered_refund_is_reported_as_unknown(self):
+    def test_unanswered_refund_is_unknown_and_holds_the_sale(self):
         order = self._sale(100.0)
         self.fake.inquire['setlstat'] = 'Accepted'
         self.fake.refund_error = TIMEOUT
-        with self.assertRaisesRegex(UserError, 'unknown'):
+        result = self._refund(order, 30.0)
+        self.assertEqual(result['status'], 'unknown', "never a retryable error: the refund may have gone through")
+        self.assertFalse(result['ok'])
+        self.assertIn('unknown', result['message'])
+        self.assertTrue(order.payment_ids.cardpointe_refund_hold)
+        # The line, or a new return of the same sale, cannot send the money back again.
+        self.fake.refund_error = None
+        with self.assertRaisesRegex(UserError, 'hold'):
             self._refund(order, 30.0)
+        self.assertEqual(len(self.fake.paths('rest/refund')), 1)
+
+    def test_only_a_manager_clears_the_hold_and_returns_resume(self):
+        order = self._sale(100.0)
+        self.fake.inquire['setlstat'] = 'Accepted'
+        self.fake.refund_error = TIMEOUT
+        self._refund(order, 30.0)
+        payment = order.payment_ids
+        with self.assertRaises(AccessError):
+            payment.with_user(self.cashier).action_cardpointe_clear_refund_hold()
+        self.assertTrue(payment.cardpointe_refund_hold)
+        payment.action_cardpointe_clear_refund_hold()  # administrator, a POS manager
+        self.assertFalse(payment.cardpointe_refund_hold)
+        self.fake.refund_error = None
+        self.assertEqual(self._refund(order, 30.0)['status'], 'approved')
+
+    def test_return_stopping_part_way_holds_every_payment_it_touched(self):
+        self.open_new_session()
+        order_data = self.create_ui_order_data(
+            [(self.product, 10)], payments=[(self.cardpointe_pm, 60.0), (self.cardpointe_pm, 40.0)])
+        order = self.env['pos.order'].browse(
+            self.env['pos.order'].sync_from_ui([order_data])['pos.order'][0]['id'])
+        first, second = order.payment_ids.sorted('id')
+        first.write({'cardpointe_retref': 'SALE-A', 'cardpointe_status': 'approved'})
+        second.write({'cardpointe_retref': 'SALE-B', 'cardpointe_status': 'approved'})
+        self.fake.inquire = {'amount': '60.00', 'setlstat': 'Accepted', 'respstat': 'A', 'respcode': '00',
+                             'voidable': 'N', 'refundable': 'Y'}
+        self.fake.inquire_retref_from_path = True
+        self.fake.refund_answers = [
+            {'respstat': 'A', 'respcode': '000', 'resptext': 'Approval', 'retref': 'REFUND-A'},
+            {'respstat': 'C', 'respcode': '05', 'resptext': 'Refund declined'},
+        ]
+        result = self._refund(order, 100.0)
+        self.assertEqual(result['status'], 'unknown', "a retry would return SALE-A a second time")
+        self.assertIn('REFUND-A', result['message'])
+        self.assertTrue(first.cardpointe_refund_hold)
+        self.assertTrue(second.cardpointe_refund_hold)
+        with self.assertRaisesRegex(UserError, 'hold'):
+            self._refund(order, 100.0)
+        self.assertEqual(len(self.fake.paths('rest/refund')), 2)
 
     def test_cashier_of_another_company_cannot_refund(self):
         order = self._sale(100.0)
