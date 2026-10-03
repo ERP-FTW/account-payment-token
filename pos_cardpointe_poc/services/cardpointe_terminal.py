@@ -61,6 +61,13 @@ class CardPointeTerminalClient:
         return safe_truncate(body)
 
     def _request(self, method, path, payload=None, session_key=None, timeout=30):
+        if not self.config.auth_key:
+            # Nothing was sent: a configuration gap, not a terminal outcome.
+            return {
+                'ok': False,
+                'status': 'error',
+                'message': 'CardPointe terminal authorization key is not set on the terminal configuration.',
+            }
         url = self._url(path)
         headers = self._headers(session_key=session_key)
         _logger.info(
@@ -87,6 +94,8 @@ class CardPointeTerminalClient:
                 'ok': False,
                 'status': status,
                 'message': 'Terminal request timed out.' if status == 'timeout' else message,
+                # No HTTP answer: the request may still have reached the terminal.
+                'transport_error': True,
             }
 
         _logger.info(

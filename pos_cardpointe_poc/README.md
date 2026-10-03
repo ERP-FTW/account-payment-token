@@ -1,67 +1,92 @@
-# pos_cardpointe_poc
+# pos_cardpointe_poc — CardPointe Bolt/Clover terminal payments in the Odoo 18 POS
 
-Minimal Odoo 18 proof-of-concept addon to run POS card-present sales on CardPointe Bolt terminals (Clover Flex) through server-side proxy calls.
+Card-present POS sales on CardPointe Integrated Terminal devices (Clover Flex/Mini/Pocket in Bolt
+mode) through server-side calls, POS returns through the CardPointe Gateway, and an optional
+Hosted iFrame manual-entry fallback. Depends on `point_of_sale` and `payment_cardpointe_base`.
 
-## Flow used by this module
+Verified on Odoo 18.0 Community (`70bdd4035000c836f9f459345e45cc4d408c68d8`): install, upgrade
+from `2f156b1`, module tests (cashier returns, company isolation, unknown terminal outcomes), a
+POS asset build, and configuration through reviewed `hermes-odoo-data-load/v1` packages in a lab.
+**No physical terminal or CardPointe UAT call has been exercised from this branch**; the UAT
+acceptance below is still required.
 
-1. `POST /v2/connect`
-   - Body: `merchantId`, `hsn`
-   - Header: `Authorization: <auth_key>`
-   - Reads `X-CardConnect-SessionKey` response header.
-2. `POST /v4/authCard`
-   - Body: `merchantId`, `hsn`, `amount` (implied cents), `capture: true`, `orderId`, `includeSignature`
-   - Headers: `Authorization` + `X-CardConnect-SessionKey`
-3. `POST /v2/readSignature` (when signature policy requires post-auth capture)
-   - Body: `merchantId`, `hsn`
-   - Headers: `Authorization` + `X-CardConnect-SessionKey`
-4. `POST /cardconnect/rest/sigcap` (gateway attach)
-   - Body: `merchid`, `retref`, `signature`
-   - Auth: gateway username/password
-5. `POST /v2/cancel` (when cashier clicks **Cancel** while terminal is waiting)
-   - Body: `merchantId`, `hsn`
-   - Headers: `Authorization` + `X-CardConnect-SessionKey`
+## Sale flow
 
-No PAN is stored.
+1. `/pos_cardpointe_poc/start` (cashier must be a POS user of the method's company; the method,
+   terminal configuration and merchant configuration must share that company): takes the
+   terminal's runtime lock, opens a session (`POST /v2/connect`, `X-CardConnect-SessionKey`), and
+   issues a **terminal order id** — 19 uppercase alphanumeric characters, the Integrated Terminal
+   API's documented `orderId` format — returned to the POS line before any charge.
+2. `/pos_cardpointe_poc/auth`: `POST /v4/authCard` with the amount in implied cents (`"4250"` for
+   42.50), `capture: true`, the terminal order id, and `includeSignature` per the signature policy.
+   The session is always disconnected and the lock released afterwards.
+3. Outcomes:
+   - approved → the line stores `retref`, `authcode`, the approved amount and the terminal order id;
+   - declined / cancelled / terminal in use / merchant mode → reported as such, nothing to resolve;
+   - **unknown** (timeout, 5xx, dropped connection, exception) → the server immediately asks the
+     Gateway `inquireByOrderid` for that terminal order id: an approval for the line's amount is
+     recorded as the sale (never charged again); *Txn not found* or a voided authorization means
+     no charge stands and the cashier may retry; an approval for a **different amount** (for
+     example a tip chosen during the lost call) and anything else stay **unknown** — void or
+     adjust that charge in CardPointe, then press Send to check again.
+4. An **unknown** line blocks a new charge and manual entry. Pressing Send again calls
+   `/pos_cardpointe_poc/inquire` (also reachable as `/poll` with the terminal order id), which
+   resolves it the same way without charging.
+
+Deployment prerequisite: the terminal may take up to 2 minutes plus 32 s at the Gateway. Keep
+`request_timeout_seconds` at or above 160 and the Odoo worker `limit_time_real` (and any reverse
+proxy timeout) above that, or Odoo gives up first and every slow sale becomes an unknown outcome to
+resolve.
+
+## Returns
+
+A negative CardPointe line on a refund order calls `/pos_cardpointe_poc/refund` (same access
+checks; the refunded order must belong to the method's company). The original sale payments of the
+refunded lines are allocated the return amount, and each allocation goes through
+`payment_cardpointe_base` `execute_void_or_refund` (see its README): the inquiry comes first; a
+partial return is an exact refund and never a void; a full unsettled return voids; an unanswered
+void/refund is reported as an unknown outcome not to be retried.
+
+**Return hold.** When a void/refund gets no answer, or a return spread over several sale payments
+stops after one of them was already returned, the route answers `unknown` (the POS keeps the line
+unknown and never resends it) and stamps a hold on each sale payment involved
+(field `cardpointe_refund_hold`, with the time and the references). Any further return of that
+sale is refused until a POS manager has checked CardPointe reporting and pressed **Clear CardPointe
+return hold** on the original payment (Point of Sale → Orders → Payments). A failure before any
+money moved stays an ordinary, retryable error. If Odoo itself does not answer the POS during a
+return, the POS line becomes unknown too; check reporting before returning that sale again.
 
 ## Configuration
 
-Create **Point of Sale > Configuration > CardPointe Terminal Configs**:
+Create the records with the reviewed configuration packages (Guild skill `odoo-cardpointe`,
+`recipes/pos-terminal/`) or by hand:
 
-- Base URL: `https://bolt-uat.cardpointe.com/api`
-- Auth Key: CardPointe Bolt authorization key
-- Merchant ID: `800000009875`
-- HSN: `C047UG43720996`
-- Request Timeout Seconds: `120`
-- Signature Mode:
-  - `never`
-  - `over_threshold` (default)
-  - `on_policy`
-  - `always`
-- Signature Threshold Amount: `50.00` (default)
-- Signature Capture Method:
-  - `inline_authcard` (default)
-  - `post_readSignature`
+- **CardPointe Terminal Config** (Point of Sale → Configuration): company, merchant configuration,
+  Base URL (`https://bolt-uat.cardpointe.com/api` for UAT — change deliberately for production),
+  device type, HSN; then signature mode/threshold, request timeout, terminal receipt printing as the
+  client wants. The **Auth Key** is entered by an authorized operator; the record can exist
+  without it, but no terminal call is sent until it is set.
+- **Payment method**: Use a Payment Terminal = *CardPointe POC*, CardPointe Config, a bank journal,
+  and *Enable Manual Card Entry* only if the iFrame fallback is in scope (needs the merchant's
+  Tokenizer URL).
+- Add the method to the POS configuration, keeping the methods it already has.
 
-Then configure payment method `Card (CardPointe POC)`:
+## UAT acceptance (needs the CardPointe UAT merchant, its credentials and a terminal in Bolt mode)
 
-- Use a Payment Terminal: `CardPointe POC`
-- CardPointe Config: your config record
+1. **Test Credentials** on the merchant configuration and **Test Connect** on the terminal
+   configuration succeed (connection only — not payment evidence).
+2. Approved sale: the `pos.payment` has `cardpointe_status = approved`, a `retref`, and
+   `cardpointe_terminal_order_id`; the Gateway `inquire/<retref>/<merchid>` shows the same amount.
+3. Decline (UAT decline amount from CardPointe's test card guide) is shown as a decline.
+4. Unknown outcome: interrupt the network between Odoo and the terminal during authCard; the line
+   becomes unknown or is resolved through `inquireByOrderid`; no second charge exists in reporting.
+5. Partial return before settlement fails with *Txn not settled* and moves nothing; after
+   settlement it refunds exactly the returned amount; a full return before settlement voids.
+   Interrupt the Gateway during a return: the line becomes unknown, the sale payment shows the
+   return hold, and a second return is refused until a manager clears it.
+6. Confirm the Gateway accepts the module's `POST` for void/refund/auth (the docs show `PUT`).
 
-## Signature policy behavior
-
-- `never`: no signature capture.
-- `always`: always requests signature inline (`authCard includeSignature=true`).
-- `over_threshold`: requests signature inline when `order_total >= signature_threshold_amount` (no MSR/EMV dependency).
-- `on_policy`: runs `authCard includeSignature=false`, inspects `emvTagData`, and only then captures signature when EMV policy indicates signature is applicable (`readSignature` + optional `sigcap`).
-- Database persistence stores only metadata (no blob):
-  - `cardpointe_signature_required`
-  - `cardpointe_signature_captured`
-  - `cardpointe_signature_method`
-
-
-## Migration note
-
-Legacy value `msr_over_threshold` is automatically mapped to `over_threshold` in model `create/write`, so existing configs continue to work after upgrade.
+Record Odoo records and CardPointe reporting side by side; mark which runs reached UAT.
 
 ## Terminal verification (manual)
 
@@ -148,16 +173,3 @@ Terminal config form includes admin-only **Test Connect** button.
 - **timeout**: terminal or network did not finish within timeout; verify terminal app mode, connectivity, and retry.
 - **errorCode 7 / already in use on connect**: treat as stale terminal session state; retry once, then restart CardPointe app on terminal if it persists.
 - **Signature not attached**: validate gateway credentials on terminal config's merchant config and confirm `sigcap` returns approval.
-
-## Gateway refund/void flow for POS return orders
-
-When a POS payment line amount is negative, this module triggers a server-side Gateway flow:
-
-1. Find the original sale `retref` values from refunded ticket lines.
-2. Allocate refund amount across original sale payments (partial refunds supported).
-3. `GET /inquire/{retref}/{merchid}`.
-4. If unsettled (`setlstat` indicates not settled or is missing): `POST /void`.
-5. Otherwise: `POST /refund` with allocated amount.
-6. If refund returns `respcode=28` (`Txn not settled`), the system automatically retries as `POST /void`.
-
-Results are written back to the refund `pos.payment` line (`cardpointe_retref`, `cardpointe_respcode`, `cardpointe_resptext`, `cardpointe_operation`, `cardpointe_original_retref`, `cardpointe_ok`).

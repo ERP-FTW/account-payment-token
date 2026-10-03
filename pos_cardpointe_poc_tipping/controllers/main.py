@@ -102,12 +102,18 @@ class PosCardPointeTippingController(PosCardPointeController):
                 total_amount = base_amount + tip_amount
 
             signature_required_pre_auth = self._signature_required_pre_auth(config, total_amount)
-            result = terminal_client.auth_card_with_session(
-                amount_dollars=total_amount,
-                order_id=config.cardpointe_active_order_uid,
-                session_key=session_key,
-                include_signature=signature_required_pre_auth,
-            )
+            terminal_order_id = self._terminal_order_id(config)
+            try:
+                result = terminal_client.auth_card_with_session(
+                    amount_dollars=total_amount,
+                    order_id=terminal_order_id,
+                    session_key=session_key,
+                    include_signature=signature_required_pre_auth,
+                )
+            except Exception as exc:  # noqa: BLE001 - the request may have reached the terminal
+                _logger.exception('CardPointe tipping authCard raised request_id=%s', request_id)
+                result = {'ok': False, 'status': 'timeout', 'message': str(exc)}
+            result = self._resolve_if_unknown(config, result, terminal_order_id, total_amount)
 
             signature_required = signature_required_pre_auth
             signature_captured = bool(result.get('signature_captured_inline')) if signature_required_pre_auth else False
@@ -157,6 +163,8 @@ class PosCardPointeTippingController(PosCardPointeController):
                     'cardpointe_tip_amount': tip_amount,
                     'cardpointe_base_amount': base_amount,
                     'cardpointe_total_amount': total_amount,
+                    'terminal_order_id': terminal_order_id,
+                    'recovered': bool(result.get('recovered')),
                 }
 
             return {
@@ -164,6 +172,8 @@ class PosCardPointeTippingController(PosCardPointeController):
                 'message': result.get('message') or result.get('resptext') or 'Terminal payment failed.',
                 'respcode': result.get('respcode'),
                 'resptext': result.get('resptext'),
+                'terminal_order_id': terminal_order_id,
+                'resolution': result.get('resolution'),
             }
         finally:
             disconnect_result = terminal_client.disconnect(session_key) if session_key else {'ok': True}

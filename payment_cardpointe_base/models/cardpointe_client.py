@@ -135,6 +135,7 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
     return {
         'ok': True,
         'data': response_data,
+        'text': response_text_snippet,
         'error_message': '',
         'error_code': None,
         'http_status': http_status,

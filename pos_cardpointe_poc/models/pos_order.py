@@ -27,5 +27,6 @@ class PosOrder(models.Model):
             'cardpointe_terminal_error_status': ui_paymentline.get('cardpointe_terminal_error_status'),
             'cardpointe_terminal_error_message': ui_paymentline.get('cardpointe_terminal_error_message'),
             'cardpointe_gateway_http_status': ui_paymentline.get('cardpointe_gateway_http_status'),
+            'cardpointe_terminal_order_id': ui_paymentline.get('cardpointe_terminal_order_id'),
         })
         return values

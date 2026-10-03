@@ -1,11 +1,14 @@
+import logging
 from decimal import Decimal
 
 from odoo import _, api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 
 from odoo.addons.payment_cardpointe_base.services.gateway import CardPointeGatewayClient
 from odoo.addons.payment_cardpointe_base.services.money import format_gateway_amount
 from odoo.addons.payment_cardpointe_base.services.refunds import execute_void_or_refund
+
+_logger = logging.getLogger(__name__)
 
 
 class PosPayment(models.Model):
@@ -74,6 +77,10 @@ class PosPayment(models.Model):
     cardpointe_request_started_at = fields.Datetime(copy=False)
     cardpointe_request_order_uid = fields.Char(copy=False, index=True)
     cardpointe_request_payment_line_uuid = fields.Char(copy=False, index=True)
+    cardpointe_terminal_order_id = fields.Char(
+        copy=False, index=True,
+        help='orderId sent to the terminal; the key for the Gateway inquiry by order id.',
+    )
 
     cardpointe_capture_method = fields.Selection([
         ('terminal', 'Terminal'),
@@ -96,6 +103,13 @@ class PosPayment(models.Model):
     cardpointe_terminal_error_status = fields.Char()
     cardpointe_terminal_error_message = fields.Char()
     cardpointe_gateway_http_status = fields.Integer()
+    cardpointe_refund_hold = fields.Char(
+        string='CardPointe return hold', copy=False, readonly=True,
+        help='Set when a CardPointe void/refund against this payment may have moved money without '
+             'Odoo recording it (no answer, or a multi-payment return that stopped part way). Returns '
+             'against this sale are refused until a POS manager has checked CardPointe reporting and '
+             'cleared the hold.',
+    )
 
     @api.model
     def _load_pos_data_fields(self, config_id):
@@ -128,6 +142,7 @@ class PosPayment(models.Model):
             'cardpointe_request_started_at',
             'cardpointe_request_order_uid',
             'cardpointe_request_payment_line_uuid',
+            'cardpointe_terminal_order_id',
         ]
         return list(dict.fromkeys(fields_list))
 
@@ -168,9 +183,16 @@ class PosPayment(models.Model):
         config = payment_method.cardpointe_config_id
         if not config:
             raise UserError(_('CardPointe config missing on payment method.'))
+        company = payment_method.company_id
+        if company and company not in self.env.user.company_ids:
+            raise UserError(_('You cannot refund with a payment method of another company.'))
         merchant_config = self._cardpointe_get_merchant_config(config)
         if not merchant_config:
             raise UserError(_('CardPointe merchant config missing on terminal config.'))
+        if company and (config.company_id != company or merchant_config.company_id != company):
+            raise UserError(_('CardPointe terminal or merchant configuration belongs to another company.'))
+        # Credentials are system-only fields: read them only after the checks above.
+        merchant_config = merchant_config.sudo()
         if not merchant_config.gateway_username or not merchant_config.gateway_password:
             raise UserError(_('CardPointe gateway credentials are missing on merchant config.'))
 
@@ -193,6 +215,25 @@ class PosPayment(models.Model):
                 amount=format_gateway_amount(allocation['amount']),
                 orderid=allocation.get('order_uid'),
             )
+            if result.get('unknown'):
+                # No answer: the void/refund may have been applied. Hold the sale so neither this line
+                # nor a new return can send it again before someone has checked CardPointe.
+                reason = _(
+                    'CardPointe did not answer the %(operation)s of %(amount)s for reference %(retref)s; '
+                    'its outcome is unknown.',
+                    operation=result.get('operation') or 'refund', amount=allocation['amount'],
+                    retref=allocation['retref'],
+                )
+                return self._cardpointe_hold_refund(allocations, results, allocation, result, reason)
+            if not result.get('ok') and results:
+                # An earlier payment of this sale was already refunded: a retry would refund it again.
+                reason = _(
+                    'CardPointe refused the return for reference %(retref)s (%(message)s) after an earlier '
+                    'payment of the same sale was already returned.',
+                    retref=allocation['retref'],
+                    message=result.get('resptext') or result.get('message') or _('no reason given'),
+                )
+                return self._cardpointe_hold_refund(allocations, results, allocation, result, reason)
             if not result.get('ok'):
                 message = result.get('resptext') or result.get('message') or _('CardPointe refund failed.')
                 lowered = (message or '').lower()
@@ -206,7 +247,7 @@ class PosPayment(models.Model):
                     message = _('CardPointe gateway is unavailable. Please retry in a few seconds.')
                 raise UserError(message)
 
-            results.append(result)
+            results.append(dict(result, source_retref=allocation['retref']))
 
         if not results:
             raise UserError(_('No refundable CardPointe transaction was found for this return order.'))
@@ -227,14 +268,59 @@ class PosPayment(models.Model):
             'ok': True,
         }
 
+    def _cardpointe_hold_refund(self, allocations, applied_results, stopped_allocation, stopped_result,
+                                reason):
+        """Record that money may have moved for these sale payments without a completed return.
+
+        Holds the sale payment whose operation stopped and every one already returned in this call,
+        and answers the POS with ``unknown`` so the line is not offered for another attempt.
+        """
+        applied = [r['source_retref'] for r in applied_results]
+        held_retrefs = applied + [stopped_allocation['retref']]
+        payment_ids = [a['payment_id'] for a in allocations if a['retref'] in held_retrefs]
+        stamp = fields.Datetime.now()
+        message = reason
+        if applied:
+            refs = ', '.join(
+                f"{r['source_retref']} ({' '.join(filter(None, [r.get('operation'), r.get('retref')]))})"
+                for r in applied_results
+            )
+            message += ' ' + _('Already returned in this attempt: %(refs)s.', refs=refs)
+        self.browse(payment_ids).sudo().write({'cardpointe_refund_hold': f'{stamp} {message}'[:1000]})
+        _logger.warning('CardPointe return held payments=%s reason=%s', payment_ids, message)
+        return {
+            'status': 'unknown',
+            'ok': False,
+            'message': message + ' ' + _(
+                'Do not retry this return. A POS manager must check CardPointe reporting, then clear the '
+                'hold on the original payment before another return of this sale.'),
+            'operation': stopped_result.get('operation') or 'refund',
+            'original_retref': ','.join(held_retrefs),
+            'retref': ','.join(filter(None, [r.get('retref') for r in applied_results])),
+        }
+
+    def action_cardpointe_clear_refund_hold(self):
+        if not self.env.user.has_group('point_of_sale.group_pos_manager'):
+            raise AccessError(_('Only a POS manager can clear a CardPointe return hold.'))
+        for payment in self.filtered('cardpointe_refund_hold'):
+            _logger.info('CardPointe return hold cleared payment=%s by user=%s (was: %s)',
+                         payment.id, self.env.user.id, payment.cardpointe_refund_hold)
+        self.sudo().write({'cardpointe_refund_hold': False})
+        return True
+
     def _cardpointe_build_refund_allocations(self, payment_method, refunded_orderline_ids, refund_amount):
         if not refunded_orderline_ids:
             raise UserError(_('No refunded order lines were found. Please refund from a paid ticket.'))
 
         lines = self.env['pos.order.line'].browse(refunded_orderline_ids).exists()
-        original_order_ids = lines.mapped('order_id').ids
-        if not original_order_ids:
+        original_orders = lines.mapped('order_id')
+        if not original_orders:
             raise UserError(_('Original order for refund could not be determined.'))
+        if payment_method.company_id and any(
+            order.company_id != payment_method.company_id for order in original_orders
+        ):
+            raise UserError(_('The refunded order belongs to another company.'))
+        original_order_ids = original_orders.ids
 
         original_payments = self.search([
             ('pos_order_id', 'in', original_order_ids),
@@ -244,6 +330,13 @@ class PosPayment(models.Model):
         ], order='id asc')
         if not original_payments:
             raise UserError(_('No original CardPointe payment reference found for this refund.'))
+        held = original_payments.filtered('cardpointe_refund_hold')
+        if held:
+            raise UserError(_(
+                'A previous return of this sale may have moved money without being recorded (%(hold)s). '
+                'A POS manager must check CardPointe reporting and clear the hold on the original payment '
+                'before another return.', hold=held[0].cardpointe_refund_hold,
+            ))
 
         allocations = []
         remaining = Decimal(format_gateway_amount(refund_amount))
@@ -265,6 +358,7 @@ class PosPayment(models.Model):
 
             allocated = min(available, remaining)
             allocations.append({
+                'payment_id': payment.id,
                 'retref': payment.cardpointe_retref,
                 'amount': allocated,
                 'order_uid': payment.pos_order_id.pos_reference or payment.pos_order_id.name,

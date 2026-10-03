@@ -4,7 +4,8 @@ from odoo import api, fields, models
 class PosPaymentMethod(models.Model):
     _inherit = 'pos.payment.method'
 
-    cardpointe_config_id = fields.Many2one('pos.cardpointe.terminal.config', string='CardPointe Config')
+    cardpointe_config_id = fields.Many2one(
+        'pos.cardpointe.terminal.config', string='CardPointe Config', check_company=True)
     cardpointe_manual_entry_enabled = fields.Boolean(
         string='Enable Manual Card Entry',
         default=False,

@@ -18,6 +18,10 @@
         <field name="model">cardpointe.merchant.config</field>
         <field name="arch" type="xml">
             <form>
+                <header>
+                    <button name="action_test_credentials" type="object" string="Test Credentials"
+                            groups="base.group_system"/>
+                </header>
                 <sheet>
                     <group>
                         <field name="name"/>

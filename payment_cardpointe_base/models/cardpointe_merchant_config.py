@@ -1,4 +1,6 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
+
+from odoo.addons.payment_cardpointe_base.services.gateway import CardPointeGatewayClient
 
 
 class CardPointeMerchantConfig(models.Model):
@@ -9,8 +11,12 @@ class CardPointeMerchantConfig(models.Model):
     company_id = fields.Many2one('res.company', required=True, default=lambda self: self.env.company)
     mid = fields.Char(required=True, string='Merchant ID (MID)')
     gateway_base_url = fields.Char(required=True, default='https://fts-uat.cardconnect.com/cardconnect/rest/')
-    gateway_username = fields.Char(required=True)
-    gateway_password = fields.Char(required=True, groups='base.group_system')
+    # Credentials are entered by an authorized operator after the record exists, so a reviewed
+    # configuration package can create the record without carrying secrets. Every Gateway call
+    # refuses to run while either one is missing.
+    gateway_username = fields.Char(help='Gateway API username. Required before any Gateway call.')
+    gateway_password = fields.Char(groups='base.group_system',
+                                   help='Gateway API password. Required before any Gateway call.')
     tokenizer_url = fields.Char()
     debug_logging = fields.Boolean()
     timeout_connect = fields.Integer(default=10)
@@ -33,3 +39,25 @@ class CardPointeMerchantConfig(models.Model):
         if vals.get('gateway_base_url'):
             vals['gateway_base_url'] = self._normalize_base_url(vals['gateway_base_url'])
         return super().write(vals)
+
+    def action_test_credentials(self):
+        """Validate the Gateway credentials against this MID. Nothing is authorized or charged."""
+        self.ensure_one()
+        result = CardPointeGatewayClient(self.sudo()).test_credentials(self.mid)
+        if result.get('ok'):
+            message = _("CardPointe accepted the credentials for MID %(mid)s at %(url)s.",
+                        mid=self.mid, url=self.gateway_base_url)
+        else:
+            message = _("CardPointe did not accept the credentials (HTTP %(status)s): %(detail)s",
+                        status=result.get('http_status') or '-',
+                        detail=(result.get('message') or result.get('text') or '')[:200])
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _("CardPointe Credentials"),
+                'message': message,
+                'type': 'success' if result.get('ok') else 'danger',
+                'sticky': False,
+            },
+        }

@@ -11,13 +11,15 @@ _logger = logging.getLogger(__name__)
 class CardPointeTerminalConfig(models.Model):
     _name = 'pos.cardpointe.terminal.config'
     _description = 'POS CardPointe Terminal Config'
+    _check_company_auto = True
 
     name = fields.Char(required=True)
     company_id = fields.Many2one('res.company', required=True, default=lambda self: self.env.company)
     base_url = fields.Char(default='https://bolt-uat.cardpointe.com/api', required=True)
-    merchant_config_id = fields.Many2one('cardpointe.merchant.config', required=True)
+    merchant_config_id = fields.Many2one('cardpointe.merchant.config', required=True, check_company=True)
     merchant_id = fields.Char(related='merchant_config_id.mid', store=True, readonly=True)
-    auth_key = fields.Char(required=True)
+    # Entered by an authorized operator after the record exists (see merchant credentials).
+    auth_key = fields.Char(help='Integrated Terminal API authorization key. Required before any terminal call.')
     device_type = fields.Selection(
         [
             ('clover_pocket', 'Clover Pocket'),
@@ -62,6 +64,11 @@ class CardPointeTerminalConfig(models.Model):
     cardpointe_active_request_uid = fields.Many2one('res.users', copy=False)
     cardpointe_active_started_at = fields.Datetime(copy=False)
     cardpointe_active_order_uid = fields.Char(copy=False, index=True)
+    cardpointe_active_terminal_order_id = fields.Char(
+        copy=False, index=True,
+        help='orderId sent to the terminal for the active request. It is also the key of the '
+             'Gateway inquiry that resolves an authorization whose outcome is unknown.',
+    )
     cardpointe_active_payment_line_uuid = fields.Char(copy=False, index=True)
     cardpointe_active_payment_method_id = fields.Many2one('pos.payment.method', copy=False)
 
@@ -95,6 +102,7 @@ class CardPointeTerminalConfig(models.Model):
             'cardpointe_active_session_key': False,
             'cardpointe_active_request_uid': False,
             'cardpointe_active_order_uid': False,
+            'cardpointe_active_terminal_order_id': False,
             'cardpointe_active_payment_line_uuid': False,
             'cardpointe_active_payment_method_id': False,
         })

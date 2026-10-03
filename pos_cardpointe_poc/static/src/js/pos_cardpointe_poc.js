@@ -38,6 +38,11 @@ export class CardPointePOC extends PaymentInterface {
             return this._send_refund_request(order, line);
         }
 
+        if (line.cardpointe_status === "unknown") {
+            // The previous attempt may have charged the card: resolve it before any new charge.
+            return this._resolveUnknownLine(line);
+        }
+
         line.set_payment_status("waitingCard");
         let startResult;
         try {
@@ -67,6 +72,7 @@ export class CardPointePOC extends PaymentInterface {
         }
 
         this._activeRequestByUuid[uuid] = startResult.request_id;
+        line.cardpointe_terminal_order_id = startResult.terminal_order_id || "";
         delete this._cashierCancelledByUuid[uuid];
         let result;
         try {
@@ -76,9 +82,12 @@ export class CardPointePOC extends PaymentInterface {
                 { silent: true }
             );
         } catch {
-            this._showError(_t("Could not reach Odoo server during terminal payment."));
-            line.set_payment_status("retry");
+            // The terminal may have charged the card even though Odoo did not answer.
             delete this._activeRequestByUuid[uuid];
+            this._markUnknown(line, {
+                status: "unknown",
+                message: _t("Odoo did not answer during the terminal payment, so its outcome is unknown. Do not take another payment for this line: press Send again to check its status."),
+            });
             return false;
         }
         delete this._activeRequestByUuid[uuid];
@@ -103,6 +112,13 @@ export class CardPointePOC extends PaymentInterface {
     }
 
     async _send_refund_request(order, line) {
+        if (line.cardpointe_status === "unknown") {
+            // The previous attempt may have returned the money: never send it again from this line.
+            this._showError(
+                _t("This return's outcome is unknown, so it is not sent again. Check CardPointe reporting; a POS manager clears the hold on the original payment before another return of this sale.")
+            );
+            return false;
+        }
         const refundedOrderLineIds = order.lines
             .filter((orderLine) => orderLine.refunded_orderline_id)
             .map((orderLine) => orderLine.refunded_orderline_id.id || orderLine.refunded_orderline_id);
@@ -127,11 +143,18 @@ export class CardPointePOC extends PaymentInterface {
                 { silent: true }
             );
         } catch {
-            this._showError(_t("Could not reach Odoo server during CardPointe refund."));
-            line.set_payment_status("retry");
+            // Odoo may have sent the void/refund before the connection dropped.
+            this._markRefundUnknown(
+                line,
+                _t("Odoo did not answer during the CardPointe return, so its outcome is unknown. Check CardPointe reporting before returning this sale again.")
+            );
             return false;
         }
 
+        if (result.status === "unknown") {
+            this._markRefundUnknown(line, result.message);
+            return false;
+        }
         if (result.status !== "approved") {
             this._handleFailedResult(line, result);
             return false;
@@ -193,7 +216,68 @@ export class CardPointePOC extends PaymentInterface {
         return true;
     }
 
+    _markRefundUnknown(line, message) {
+        line.cardpointe_status = "unknown";
+        line.cardpointe_ok = false;
+        line.set_payment_status("retry");
+        this._showError(message || _t("This return's outcome is unknown. Check CardPointe reporting."));
+    }
+
+    _markUnknown(line, result) {
+        line.cardpointe_status = "unknown";
+        line.cardpointe_ok = false;
+        line.cardpointe_terminal_order_id = result.terminal_order_id || line.cardpointe_terminal_order_id || "";
+        line.set_payment_status("retry");
+        this._showError(
+            result.message ||
+                _t("Payment outcome unknown: the card may have been charged. Press Send again to check its status.")
+        );
+    }
+
+    async _resolveUnknownLine(line) {
+        if (!line.cardpointe_terminal_order_id) {
+            this._showError(
+                _t("This payment's outcome is unknown and it has no terminal reference. Check CardPointe reporting before taking another payment.")
+            );
+            return false;
+        }
+        line.set_payment_status("waiting");
+        let result;
+        try {
+            result = await rpc(
+                "/pos_cardpointe_poc/inquire",
+                {
+                    payment_method_id: line.payment_method_id.id,
+                    terminal_order_id: line.cardpointe_terminal_order_id,
+                    amount: line.amount,
+                },
+                { silent: true }
+            );
+        } catch {
+            this._markUnknown(line, {});
+            return false;
+        }
+        if (result.status === "approved") {
+            this._applyApprovedCardPointeResult(line, result, "terminal");
+            return true;
+        }
+        if (result.status === "unknown") {
+            this._markUnknown(line, result);
+            return false;
+        }
+        // No charge stands for the previous attempt: the next Send starts a new payment.
+        line.cardpointe_status = result.status || "error";
+        line.cardpointe_terminal_order_id = "";
+        line.set_payment_status("retry");
+        this._showError(result.message || _t("No charge stands for the previous attempt. You can take the payment again."));
+        return false;
+    }
+
     _handleFailedResult(line, result) {
+        if (result.status === "unknown") {
+            this._markUnknown(line, result);
+            return;
+        }
         line.cardpointe_status = result.status || "error";
         line.cardpointe_ok = false;
         line.cardpointe_signature_required = false;
@@ -239,6 +323,10 @@ export class CardPointePOC extends PaymentInterface {
         const order = this.pos.get_order();
         const line = this._findLine(order, uuid);
         if (!line) return false;
+        if (line.cardpointe_status === "unknown") {
+            this._showError(_t("Resolve the unknown terminal payment on this line before entering a card manually."));
+            return false;
+        }
         const config = await this._loadManualConfig(line);
         if (!config) return false;
 
@@ -305,6 +393,7 @@ export class CardPointePOC extends PaymentInterface {
         line.cardpointe_entrymode = result.entrymode || captureMethod || "";
         line.cardpointe_emvtagdata = result.emvTagData || "";
         line.cardpointe_status = "approved";
+        line.cardpointe_terminal_order_id = result.terminal_order_id || line.cardpointe_terminal_order_id || "";
         line.cardpointe_operation = "sale";
         line.cardpointe_ok = true;
         line.cardpointe_capture_method = captureMethod;
