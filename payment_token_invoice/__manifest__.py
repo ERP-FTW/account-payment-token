@@ -1,7 +1,7 @@
 {
     "name": "Invoice Token Payment Wizard",
     "summary": "Charge customer invoices with saved payment tokens from the backend.",
-    "version": "18.0.1.0.0",
+    "version": "16.0.1.0.0",
     "category": "Accounting/Accounting",
     "license": "LGPL-3",
     "author": "Your Company",
