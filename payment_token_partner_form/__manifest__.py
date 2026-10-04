@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     "name": "Internal Tokenization from Contact",
-    "version": "18.0.1.0.0",
+    "version": "16.0.1.0.0",
     "category": "Accounting/Payment",
     "summary": "Let internal users tokenize and save a customer payment method from Contacts.",
     "depends": ["contacts", "payment", "portal", "website"],
