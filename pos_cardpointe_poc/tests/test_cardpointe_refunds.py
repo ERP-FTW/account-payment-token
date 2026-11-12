@@ -36,7 +36,7 @@ class TestCardPointeRefunds(TestPoSCommon):
         cls.cashier = cls.env['res.users'].create({
             'name': 'Cashier', 'login': 'cardpointe_cashier',
             'company_id': company.id, 'company_ids': [Command.set(company.ids)],
-            'groups_id': [Command.set([cls.env.ref('base.group_user').id,
+            'group_ids': [Command.set([cls.env.ref('base.group_user').id,
                                        cls.env.ref('point_of_sale.group_pos_user').id])],
         })
 
@@ -167,3 +167,10 @@ class TestCardPointeRefunds(TestPoSCommon):
         with self.assertRaises(UserError):
             self._refund(order, 10.0)
         self.assertFalse(self.fake.paths('rest/'))
+
+    def test_cashier_cannot_read_terminal_secrets(self):
+        terminal = self.terminal.with_user(self.cashier)
+        with self.assertRaises(AccessError):
+            terminal.auth_key
+        with self.assertRaises(AccessError):
+            terminal.cardpointe_active_session_key

@@ -5,9 +5,9 @@ import { patch } from "@web/core/utils/patch";
 import { CardPointePOC } from "@pos_cardpointe_poc/js/pos_cardpointe_poc";
 
 patch(CardPointePOC.prototype, {
-    async send_payment_request(uuid) {
+    async sendPaymentRequest(uuid) {
         this._cardpointeNativeTipPromise = null;
-        const approved = await super.send_payment_request(...arguments);
+        const approved = await super.sendPaymentRequest(...arguments);
         if (approved && this._cardpointeNativeTipPromise) {
             try {
                 await this._cardpointeNativeTipPromise;
@@ -37,7 +37,7 @@ patch(CardPointePOC.prototype, {
     },
 
     async _applyCardPointeNativeTip(tipAmount) {
-        const order = this.pos.get_order();
+        const order = this.pos.getOrder();
         if (!order) {
             throw new Error("No active POS order");
         }
@@ -46,10 +46,6 @@ patch(CardPointePOC.prototype, {
         }
 
         // Native Odoo behavior creates or updates the configured tip-product line.
-        await this.pos.set_tip(tipAmount);
-
-        // Odoo restaurant uses this flag to record that after-payment tipping was handled.
-        // Set it for both a positive tip and an explicit zero-tip selection.
-        order.after_payment_tipping_set = true;
+        await this.pos.setTip(tipAmount);
     },
 });

@@ -26,7 +26,7 @@ class CardPointeTerminalClient:
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'Odoo/18 pos_cardpointe_poc',
+            'User-Agent': 'Odoo/19 pos_cardpointe_poc',
             'Authorization': self.config.auth_key,
         }
         if session_key:

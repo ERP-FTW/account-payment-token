@@ -33,6 +33,10 @@ class PosPayment(models.Model):
     def _get_cardpointe_receipt_order_id(self):
         self.ensure_one()
 
+        terminal_order_id = (self.cardpointe_terminal_order_id or '').strip()
+        if terminal_order_id:
+            return terminal_order_id
+
         order = self.pos_order_id
         values = [
             (order.pos_reference or '').strip() if order else '',
@@ -65,7 +69,7 @@ class PosPayment(models.Model):
         if not terminal_config:
             raise UserError(_('CardPointe terminal configuration is missing on this payment method.'))
 
-        return terminal_config
+        return terminal_config.sudo()
 
     def action_cardpointe_reprint_receipt(self):
         self.ensure_one()

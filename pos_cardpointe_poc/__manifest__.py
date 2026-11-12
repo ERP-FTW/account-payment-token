@@ -1,6 +1,6 @@
 {
     'name': 'POS CardPointe POC',
-    'version': '18.0.1.0.0',
+    'version': '19.0.1.0.0',
     'summary': 'POC CardPointe terminal integration for POS',
     'category': 'Sales/Point of Sale',
     'depends': ['point_of_sale', 'payment_cardpointe_base'],

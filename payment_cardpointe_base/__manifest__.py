@@ -1,6 +1,6 @@
 {
     'name': 'CardPointe Base',
-    'version': '18.0.1.0.0',
+    'version': '19.0.1.0.0',
     'category': 'Accounting/Payment Providers',
     'summary': 'Base utilities for CardPointe payments',
     'description': 'Shared CardPointe configuration and API helpers.',

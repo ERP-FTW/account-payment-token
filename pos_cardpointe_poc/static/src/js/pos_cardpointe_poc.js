@@ -3,11 +3,11 @@
 import { _t } from "@web/core/l10n/translation";
 import { rpc } from "@web/core/network/rpc";
 import { AlertDialog, ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
-import { PaymentInterface } from "@point_of_sale/app/payment/payment_interface";
+import { PaymentInterface } from "@point_of_sale/app/utils/payment/payment_interface";
 import { PaymentScreen } from "@point_of_sale/app/screens/payment_screen/payment_screen";
 import { patch } from "@web/core/utils/patch";
 import { CardPointeManualEntryPopup } from "./manual_entry_popup";
-import { register_payment_method } from "@point_of_sale/app/store/pos_store";
+import { register_payment_method } from "@point_of_sale/app/services/pos_store";
 
 export class CardPointePOC extends PaymentInterface {
     setup() {
@@ -20,16 +20,16 @@ export class CardPointePOC extends PaymentInterface {
         return order.payment_ids.find((paymentLine) => paymentLine.uuid === uuid);
     }
 
-    async send_payment_request(uuid) {
-        super.send_payment_request(uuid);
-        const order = this.pos.get_order();
+    async sendPaymentRequest(uuid) {
+        super.sendPaymentRequest(uuid);
+        const order = this.pos.getOrder();
         const line = this._findLine(order, uuid);
         if (!line) {
             return false;
         }
         if (line.amount === 0) {
             this._showError(_t("Amount must be greater than zero."));
-            line.set_payment_status("retry");
+            line.setPaymentStatus("retry");
             delete this._cashierCancelledByUuid[uuid];
             return false;
         }
@@ -43,7 +43,7 @@ export class CardPointePOC extends PaymentInterface {
             return this._resolveUnknownLine(line);
         }
 
-        line.set_payment_status("waitingCard");
+        line.setPaymentStatus("waitingCard");
         let startResult;
         try {
             startResult = await rpc(
@@ -62,7 +62,7 @@ export class CardPointePOC extends PaymentInterface {
             );
         } catch {
             this._showError(_t("Could not reach Odoo server while starting terminal payment."));
-            line.set_payment_status("retry");
+            line.setPaymentStatus("retry");
             return false;
         }
 
@@ -101,7 +101,7 @@ export class CardPointePOC extends PaymentInterface {
             line.cardpointe_status = "cancelled";
             line.cardpointe_respcode = result.respcode || "";
             line.cardpointe_resptext = result.resptext || "";
-            line.set_payment_status("retry");
+            line.setPaymentStatus("retry");
             delete this._cashierCancelledByUuid[uuid];
             return false;
         }
@@ -126,11 +126,11 @@ export class CardPointePOC extends PaymentInterface {
             this._showError(
                 _t("Refund must be started from a paid ticket so original CardPointe payment can be located.")
             );
-            line.set_payment_status("retry");
+            line.setPaymentStatus("retry");
             return false;
         }
 
-        line.set_payment_status("waiting");
+        line.setPaymentStatus("waiting");
         let result;
         try {
             result = await rpc(
@@ -168,12 +168,12 @@ export class CardPointePOC extends PaymentInterface {
         line.cardpointe_operation = result.operation || "refund";
         line.cardpointe_ok = !!result.ok;
         line.transaction_id = result.retref || "";
-        line.set_payment_status("done");
+        line.setPaymentStatus("done");
         return true;
     }
 
-    async send_payment_cancel(order, uuid) {
-        super.send_payment_cancel(order, uuid);
+    async sendPaymentCancel(order, uuid) {
+        super.sendPaymentCancel(order, uuid);
         const line = this._findLine(order, uuid);
         if (!line) {
             return false;
@@ -181,7 +181,7 @@ export class CardPointePOC extends PaymentInterface {
 
         const requestId = this._activeRequestByUuid[uuid];
         if (!requestId) {
-            line.set_payment_status("retry");
+            line.setPaymentStatus("retry");
             delete this._cashierCancelledByUuid[uuid];
             return true;
         }
@@ -193,7 +193,7 @@ export class CardPointePOC extends PaymentInterface {
             result = await rpc("/pos_cardpointe_poc/cancel", { request_id: requestId }, { silent: true });
         } catch {
             this._showError(_t("Could not reach Odoo server to cancel terminal payment."));
-            line.set_payment_status("retry");
+            line.setPaymentStatus("retry");
             delete this._cashierCancelledByUuid[uuid];
             return false;
         }
@@ -206,7 +206,7 @@ export class CardPointePOC extends PaymentInterface {
         line.cardpointe_signature_method = "";
         line.cardpointe_respcode = result.respcode || "";
         line.cardpointe_resptext = result.resptext || "";
-        line.set_payment_status("retry");
+        line.setPaymentStatus("retry");
 
         if (result.status !== "cancelled") {
             this._showError(result.message || _t("Cancel request was not accepted by terminal."));
@@ -219,7 +219,7 @@ export class CardPointePOC extends PaymentInterface {
     _markRefundUnknown(line, message) {
         line.cardpointe_status = "unknown";
         line.cardpointe_ok = false;
-        line.set_payment_status("retry");
+        line.setPaymentStatus("retry");
         this._showError(message || _t("This return's outcome is unknown. Check CardPointe reporting."));
     }
 
@@ -227,7 +227,7 @@ export class CardPointePOC extends PaymentInterface {
         line.cardpointe_status = "unknown";
         line.cardpointe_ok = false;
         line.cardpointe_terminal_order_id = result.terminal_order_id || line.cardpointe_terminal_order_id || "";
-        line.set_payment_status("retry");
+        line.setPaymentStatus("retry");
         this._showError(
             result.message ||
                 _t("Payment outcome unknown: the card may have been charged. Press Send again to check its status.")
@@ -241,7 +241,7 @@ export class CardPointePOC extends PaymentInterface {
             );
             return false;
         }
-        line.set_payment_status("waiting");
+        line.setPaymentStatus("waiting");
         let result;
         try {
             result = await rpc(
@@ -268,7 +268,7 @@ export class CardPointePOC extends PaymentInterface {
         // No charge stands for the previous attempt: the next Send starts a new payment.
         line.cardpointe_status = result.status || "error";
         line.cardpointe_terminal_order_id = "";
-        line.set_payment_status("retry");
+        line.setPaymentStatus("retry");
         this._showError(result.message || _t("No charge stands for the previous attempt. You can take the payment again."));
         return false;
     }
@@ -285,7 +285,7 @@ export class CardPointePOC extends PaymentInterface {
         line.cardpointe_signature_method = "";
         line.cardpointe_respcode = result.respcode || "";
         line.cardpointe_resptext = result.resptext || "";
-        line.set_payment_status("retry");
+        line.setPaymentStatus("retry");
 
         const canManual = line.payment_method_id.cardpointe_manual_entry_enabled && line.amount > 0;
         if (canManual && ["timeout", "in_use", "merchant_mode", "error"].includes(result.status || "error")) {
@@ -320,7 +320,7 @@ export class CardPointePOC extends PaymentInterface {
 
 
     async open_manual_entry(uuid, options = {}) {
-        const order = this.pos.get_order();
+        const order = this.pos.getOrder();
         const line = this._findLine(order, uuid);
         if (!line) return false;
         if (line.cardpointe_status === "unknown") {
@@ -356,7 +356,7 @@ export class CardPointePOC extends PaymentInterface {
     }
 
     async _submitManualAuth(line, order, token, ecomind, options = {}) {
-        line.set_payment_status("waiting");
+        line.setPaymentStatus("waiting");
         try {
             const result = await rpc("/pos_cardpointe_poc/manual_auth", {
                 pos_config_id: this.pos.config.id,
@@ -367,7 +367,7 @@ export class CardPointePOC extends PaymentInterface {
                 payment_line_uuid: line.uuid,
                 token,
                 ecomind,
-                partner_id: order.get_partner()?.id || null,
+                partner_id: order.getPartner()?.id || null,
                 ...options,
             }, { silent: true });
             if (result.status === "approved") {
@@ -384,7 +384,7 @@ export class CardPointePOC extends PaymentInterface {
 
     _applyApprovedCardPointeResult(line, result, captureMethod = "terminal") {
         const approvedAmount = this._normalizeAmount(result.amount, line.amount);
-        line.set_amount(approvedAmount);
+        line.setAmount(approvedAmount);
         line.cardpointe_retref = result.retref || "";
         line.cardpointe_authcode = result.authcode || "";
         line.cardpointe_respcode = result.respcode || "";
@@ -406,7 +406,7 @@ export class CardPointePOC extends PaymentInterface {
         line.cardpointe_signature_captured = !!result.signature_captured;
         line.cardpointe_signature_method = result.signature_method || "";
         line.transaction_id = result.retref || "";
-        line.set_payment_status("done");
+        line.setPaymentStatus("done");
     }
 
     _normalizeAmount(amount, fallback) {
@@ -432,8 +432,8 @@ register_payment_method("cardpointe_poc", CardPointePOC);
 
 patch(PaymentScreen.prototype, {
     async onClickCardPointeManualEntry() {
-        const order = this.pos.get_order();
-        const line = order?.selected_paymentline;
+        const order = this.pos.getOrder();
+        const line = order?.getSelectedPaymentline();
         if (!line || line.payment_method_id.use_payment_terminal !== "cardpointe_poc") return;
         await line.payment_method_id.payment_terminal.open_manual_entry(line.uuid, { fallback_reason: "manual_selected" });
     },

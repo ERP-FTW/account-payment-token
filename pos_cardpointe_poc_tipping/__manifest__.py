@@ -1,6 +1,6 @@
 {
     'name': 'POS CardPointe POC Tipping',
-    'version': '18.0.2.0.0',
+    'version': '19.0.2.0.0',
     'summary': 'CardPointe terminal tipping using the native Odoo POS tip product',
     'category': 'Sales/Point of Sale',
     'depends': ['pos_cardpointe_poc', 'pos_restaurant'],

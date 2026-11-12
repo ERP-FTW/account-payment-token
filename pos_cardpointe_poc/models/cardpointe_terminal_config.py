@@ -19,7 +19,10 @@ class CardPointeTerminalConfig(models.Model):
     merchant_config_id = fields.Many2one('cardpointe.merchant.config', required=True, check_company=True)
     merchant_id = fields.Char(related='merchant_config_id.mid', store=True, readonly=True)
     # Entered by an authorized operator after the record exists (see merchant credentials).
-    auth_key = fields.Char(help='Integrated Terminal API authorization key. Required before any terminal call.')
+    auth_key = fields.Char(
+        groups='base.group_system',
+        help='Integrated Terminal API authorization key. Required before any terminal call.',
+    )
     device_type = fields.Selection(
         [
             ('clover_pocket', 'Clover Pocket'),
@@ -53,7 +56,7 @@ class CardPointeTerminalConfig(models.Model):
     )
     signature_threshold_amount = fields.Float(default=50.0, required=True)
     cardpointe_active_request_id = fields.Char(copy=False, index=True)
-    cardpointe_active_session_key = fields.Char(copy=False)
+    cardpointe_active_session_key = fields.Char(copy=False, groups='base.group_system')
     cardpointe_active_request_state = fields.Selection([
         ('ready', 'Ready'),
         ('auth_started', 'Auth Started'),

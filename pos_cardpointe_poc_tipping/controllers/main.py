@@ -20,7 +20,7 @@ class PosCardPointeTippingController(PosCardPointeController):
             return 'Select a Tip Product in the Point of Sale settings before using CardPointe terminal tipping.'
         return False
 
-    @http.route('/pos_cardpointe_poc/start', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/start', type='jsonrpc', auth='user')
     def start(
         self,
         pos_config_id,
@@ -53,7 +53,7 @@ class PosCardPointeTippingController(PosCardPointeController):
             **kwargs
         )
 
-    @http.route('/pos_cardpointe_poc/auth', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/auth', type='jsonrpc', auth='user')
     def auth(self, request_id, amount=None):
         config = request.env['pos.cardpointe.terminal.config'].sudo().cardpointe_get_config_for_request(request_id)
         if not config:

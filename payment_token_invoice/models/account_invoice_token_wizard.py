@@ -118,6 +118,15 @@ class AccountInvoiceTokenWizard(models.TransientModel):
         if not provider:
             raise UserError(_("The selected token is not linked to a payment provider."))
 
+        # payment_cardpointe_base provides shared configuration and terminal
+        # services, but it does not implement saved-token charging.  Refuse
+        # before creating a transaction so an unsupported CardPointe token
+        # can never look like a successfully submitted invoice payment.
+        if provider.code == "cardpointe":
+            raise UserError(_(
+                "CardPointe saved-token charging is not supported by the installed integration."
+            ))
+
         # NEW: Odoo 18 requires payment_method_id on payment.transaction
         payment_method = token.payment_method_id
         if not payment_method:

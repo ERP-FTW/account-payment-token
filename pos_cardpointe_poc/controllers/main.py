@@ -97,7 +97,7 @@ class PosCardPointeController(http.Controller):
         gateway = CardPointeGatewayClient(merchant_config)
         return gateway.sigcap(merchid=merchant_config.mid, retref=retref, signature=signature_blob)
 
-    @http.route('/pos_cardpointe_poc/manual_config', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/manual_config', type='jsonrpc', auth='user')
     def manual_config(self, pos_config_id, payment_method_id):
         payment_method, config, error = self._validate_start_payload(pos_config_id, payment_method_id)
         if error:
@@ -117,7 +117,7 @@ class PosCardPointeController(http.Controller):
             'manual_entry_enabled': True,
         }
 
-    @http.route('/pos_cardpointe_poc/manual_auth', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/manual_auth', type='jsonrpc', auth='user')
     def manual_auth(
         self,
         pos_config_id,
@@ -216,7 +216,7 @@ class PosCardPointeController(http.Controller):
             'terminal_error_message': terminal_error_message or '',
         }
 
-    @http.route('/pos_cardpointe_poc/start', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/start', type='jsonrpc', auth='user')
     def start(
         self,
         pos_config_id,
@@ -317,7 +317,7 @@ class PosCardPointeController(http.Controller):
         )
         return {'status': 'ready', 'request_id': request_id, 'terminal_order_id': terminal_order_id}
 
-    @http.route('/pos_cardpointe_poc/auth', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/auth', type='jsonrpc', auth='user')
     def auth(self, request_id, amount=None):
         config = request.env['pos.cardpointe.terminal.config'].sudo().cardpointe_get_config_for_request(request_id)
         if not config:
@@ -432,7 +432,7 @@ class PosCardPointeController(http.Controller):
                 )
             config.cardpointe_clear_active_request()
 
-    @http.route('/pos_cardpointe_poc/cancel', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/cancel', type='jsonrpc', auth='user')
     def cancel(self, request_id):
         config = request.env['pos.cardpointe.terminal.config'].sudo().cardpointe_get_config_for_request(request_id)
         if not config:
@@ -461,7 +461,7 @@ class PosCardPointeController(http.Controller):
 
         session_key = config.cardpointe_active_session_key
         config.write({'cardpointe_active_request_state': 'cancel_requested'})
-        terminal_client = CardPointeTerminalClient(payment_method.cardpointe_config_id)
+        terminal_client = CardPointeTerminalClient(config)
         result = terminal_client.cancel(session_key)
         disconnect_result = terminal_client.disconnect(session_key)
         if not disconnect_result.get('ok'):
@@ -488,7 +488,7 @@ class PosCardPointeController(http.Controller):
             'resptext': result.get('resptext'),
         }
 
-    @http.route('/pos_cardpointe_poc/refund', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/refund', type='jsonrpc', auth='user')
     def refund(self, payment_method_id, amount, refunded_orderline_ids):
         payment_method, _config, error = self._validate_payment_method(payment_method_id)
         if error:
@@ -589,7 +589,7 @@ class PosCardPointeController(http.Controller):
                        'payment for this line; use "Check status" once the terminal and gateway are reachable.',
         }
 
-    @http.route('/pos_cardpointe_poc/inquire', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/inquire', type='jsonrpc', auth='user')
     def inquire(self, payment_method_id, terminal_order_id, amount=None):
         """Resolve a payment line left in the unknown state, without charging."""
         _payment_method, config, error = self._validate_payment_method(payment_method_id)
@@ -602,7 +602,7 @@ class PosCardPointeController(http.Controller):
         result.pop('ok', None)
         return result
 
-    @http.route('/pos_cardpointe_poc/poll', type='json', auth='user')
+    @http.route('/pos_cardpointe_poc/poll', type='jsonrpc', auth='user')
     def poll(self, payment_method_id, request_id=None, terminal_order_id=None, amount=None):
         if terminal_order_id:
             return self.inquire(payment_method_id, terminal_order_id, amount)
