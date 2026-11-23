@@ -74,6 +74,19 @@ class TestOnlineACH(TransactionCase):
             self.assertFalse(tx.cp_order_id)
             self.assertFalse(tx.cp_ach_consent_text)
 
+    def test_enrolled_program_is_card_only_not_ach(self):
+        cfg=self.env['cardpointe.merchant.config'].create({'name':'Synthetic enrolled ACH exclusion','mid':'LAB-NONROUTABLE','surcharge_program':True})
+        self.provider.cardpointe_merchant_config_id=cfg
+        tx=self.tx()
+        with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx)) as call:
+            self.submit(tx)
+        self.assertEqual(call.call_count,1)
+        self.assertEqual(call.call_args.args[:2],('PUT','auth'))
+        self.assertEqual(call.call_args.args[2]['accttype'],'ECHK')
+        self.assertNotIn('fee_amount',call.call_args.args[2])
+        self.assertFalse(tx.cp_quote)
+        self.assertEqual(tx.state,'done')
+
     def test_declined(self):
         tx=self.tx()
         with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx,'C')) as call:
@@ -337,6 +350,98 @@ class TestOnlineACH(TransactionCase):
                 self.submit(second, consent_amount='25.00')
             self.submit(first, consent_amount='25.00')
         call.assert_not_called()
+
+    def test_document_amount_hook_preserves_gross_consent_and_retry(self):
+        invoice = self.invoice()
+        tx = self.tx(amount=103)
+        tx.invoice_ids = invoice
+        self.assertEqual(tx._cp_document_amount(), 103)
+        with patch.object(type(self.provider), '_cp_online_request') as call:
+            with self.assertRaises(ValidationError):
+                self.submit(tx, consent_amount='103.00')
+        call.assert_not_called()
+        self.assertFalse(tx.cp_order_id)
+        # Model a fee addon's already-validated principal allocation. The fee
+        # addon's own tests must validate that allocation and frozen fee evidence.
+        with patch.object(type(tx), '_cp_document_amount', return_value=100):
+            with patch.object(type(self.provider), '_cp_online_request', return_value={}) as call:
+                with self.assertRaises(ValidationError):
+                    self.submit(tx, consent_amount='100.00')
+                call.assert_not_called()
+                self.submit(tx, consent_amount='103.00')
+                self.assertEqual(tx.cp_submitted_amount, 103)
+                self.assertIn('103.00 USD', tx.cp_ach_consent_text)
+                self.assertEqual(call.call_args.args[2]['amount'], '103.00')
+                self.assertEqual(tx.state, 'pending')
+                other = self.tx(amount=103)
+                other.invoice_ids = invoice
+                other.partner_id = self.env['res.partner'].create({'name': 'Synthetic fee payer'})
+                with self.assertRaises(ValidationError):
+                    self.submit(other, consent_amount='103.00')
+                self.submit(tx, consent_amount='103.00')
+                self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
+            with patch.object(type(self.provider), '_cp_online_request',
+                              return_value=self.answer(tx, amount='103.00')):
+                self.submit(tx, consent_amount='103.00')
+            self.assertEqual(tx.state, 'done')
+            with patch.object(type(self.provider), '_cp_online_request') as call:
+                with self.assertRaises(ValidationError):
+                    self.submit(other, consent_amount='103.00')
+            call.assert_not_called()
+
+    def render_consent(self, method=None, principal=100):
+        from lxml import html
+        rendered = self.env['ir.ui.view']._render_template(
+            'payment_cardpointe.inline_form', {
+                'provider_sudo': self.provider, 'pm_sudo': method or self.ach,
+                'amount': principal, 'currency': self.usd, 'partner_id': self.partner.id,
+            })
+        return html.fromstring(str(rendered))
+
+    def test_checkout_consent_default_and_extension_amount(self):
+        # Render the real inherited form: displayed text and JS dataset must agree.
+        self.assertEqual(self.provider._cp_checkout_amount(
+            100, self.usd, self.partner, self.ach.code), 100)
+        node = self.render_consent().xpath(".//div[@class='o_cp_ach']")[0]
+        self.assertEqual(node.get('data-consent-amount'), '100.00')
+        self.assertIn('100.00 USD', node.text_content())
+        tx = self.tx(amount=100)
+        with patch.object(type(self.provider), '_cp_online_request',
+                          side_effect=lambda *a, **k: self.answer(tx, amount='100.00')) as call:
+            self.submit(tx, consent_amount=node.get('data-consent-amount'))
+        self.assertEqual(call.call_args.args[2]['amount'], '100.00')
+        self.assertEqual(tx.state, 'done')
+        # These are extension-contract fixtures, not the optional addon's fee calculation.
+        for principal, total in [(100, 103), (25, 25.75)]:
+            with self.subTest(principal=principal):
+                with patch.object(type(self.provider), '_cp_checkout_amount', return_value=total) as amount:
+                    node = self.render_consent(principal=principal).xpath(".//div[@class='o_cp_ach']")[0]
+                    amount.assert_called_once_with(principal, self.usd, self.partner, self.ach.code)
+                self.assertEqual(node.get('data-consent-amount'), '%.2f' % total)
+                self.assertIn('%.2f USD' % total, node.text_content())
+                tx = self.tx(amount=total)
+                with patch.object(type(self.provider), '_cp_online_request',
+                                  side_effect=lambda *a, **k: self.answer(tx, amount='%.2f' % total)) as call:
+                    with self.assertRaises(ValidationError):
+                        self.submit(tx, consent_amount='%.2f' % principal)
+                    call.assert_not_called()
+                    self.submit(tx, consent_amount=node.get('data-consent-amount'))
+                self.assertEqual(call.call_args.args[2]['amount'], '%.2f' % total)
+                self.assertEqual(tx.state, 'done')
+                self.assertIn('%.2f USD' % total, tx.cp_ach_consent_text)
+
+    def test_checkout_amount_extension_is_not_a_card_fee(self):
+        with patch.object(type(self.provider), '_cp_checkout_amount', return_value=103) as amount:
+            form = self.render_consent(self.card)
+        amount.assert_not_called()
+        self.assertFalse(form.xpath(".//div[@class='o_cp_ach']"))
+        tx = self.tx(self.card, amount=100)
+        with patch.object(type(self.provider), '_cp_online_request',
+                          side_effect=lambda *a, **k: self.answer(tx, amount='100.00')) as call:
+            self.submit(tx)
+        self.assertEqual(call.call_args.args[2]['amount'], '100.00')
+        self.assertNotIn('fee_amount', call.call_args.args[2])
+        self.assertEqual(tx.state, 'done')
 
     def test_tokenizer_ach_mode_and_no_surcharge_dependency(self):
         url=self.provider._cp_tokenizer_url('cardpointe_ach')

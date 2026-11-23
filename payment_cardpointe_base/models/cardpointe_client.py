@@ -78,14 +78,15 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
             method=method,
             url=url,
             headers=request_headers,
-            json=payload,
+            json=None if endpoint == 'surcharge' else payload,
+            **({'params': payload} if endpoint == 'surcharge' else {}),
             timeout=request_timeout,
             auth=(provider.cardpointe_username or '', provider.cardpointe_password or ''),
         )
     except CardPointeRequestError as exc:
         lower = str(exc).lower()
         error_code = 'timeout' if 'timeout' in lower else 'request_error'
-        error_message = _("CardPointe request timed out.") if error_code == 'timeout' else str(exc)
+        error_message = _("CardPointe request timed out.") if error_code == 'timeout' else _("CardPointe request failed.")
         if 'name or service not known' in lower or 'failed to establish a new connection' in lower:
             error_code = 'connection_error'
             error_message = _("CardPointe connection error.")

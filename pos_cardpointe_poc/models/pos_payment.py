@@ -43,6 +43,7 @@ class PosPayment(models.Model):
         'uuid',
     ]
 
+    cardpointe_program_receipt = fields.Json(copy=False)
     cardpointe_retref = fields.Char()
     cardpointe_authcode = fields.Char()
     cardpointe_respcode = fields.Char()
@@ -111,10 +112,30 @@ class PosPayment(models.Model):
              'cleared the hold.',
     )
 
+    @api.constrains('cardpointe_program_receipt')
+    def _check_program_receipt(self):
+        from odoo.addons.payment_cardpointe_base.services.surcharge import money, UnusableSurcharge
+        for payment in self:
+            receipt = payment.cardpointe_program_receipt
+            if not receipt:
+                continue
+            try:
+                if not isinstance(receipt, dict) or set(receipt) != {'subtotal', 'fee', 'total', 'fee_type', 'reference', 'order_id', 'agreement'}:
+                    raise ValueError()
+                if (money(receipt['subtotal']) + money(receipt['fee']) != money(receipt['total'])
+                        or money(receipt['subtotal']) != money('%.2f' % payment.amount)
+                        or receipt['reference'] != payment.cardpointe_retref
+                        or receipt['order_id'] != payment.cardpointe_terminal_order_id
+                        or receipt['agreement'] is not True):
+                    raise ValueError()
+            except (ValueError, UnusableSurcharge):
+                raise UserError('Invalid CardPointe program receipt evidence.')
+
     @api.model
     def _load_pos_data_fields(self, config_id):
         fields_list = list(self._CARDPOINTE_POS_PAYMENT_BASE_FIELDS)
         fields_list += [
+            'cardpointe_program_receipt',
             'cardpointe_retref',
             'cardpointe_authcode',
             'cardpointe_respcode',

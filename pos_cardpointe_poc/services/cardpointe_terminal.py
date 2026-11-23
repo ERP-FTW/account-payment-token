@@ -1,4 +1,6 @@
 import json
+from odoo.addons.payment_cardpointe_base.services.surcharge import agreement, UnusableSurcharge
+from .terminal_recovery import parse_gateway_amount
 import logging
 
 from odoo.addons.payment_cardpointe_base.services.http import (
@@ -233,6 +235,8 @@ class CardPointeTerminalClient:
             'orderId': order_id,
             'includeSignature': bool(include_signature),
         }
+        if bool(getattr(getattr(self.config, 'merchant_config_id', None), 'surcharge_program', False)):
+            payload['confirmAmount'] = True
         receipt_requested = bool(self.config.print_receipt_on_terminal)
         if self.config.device_type == 'clover_flex':
             payload['printReceipt'] = receipt_requested
@@ -256,6 +260,19 @@ class CardPointeTerminalClient:
         signature_value = data.pop('signature', None)
 
         normalized = normalize_terminal_authcard_response(http_status, data)
+        receipt = None
+        program = bool(getattr(getattr(self.config, 'merchant_config_id', None), 'surcharge_program', False))
+        if normalized.get('status') == 'approved' and (program or 'fee_amount' in data):
+            try:
+                if not program:
+                    raise UnusableSurcharge('Unexpected program fee; check merchant configuration.')
+                if str(data.get('merchid')) != str(self.config.merchant_id) or data.get('orderid') != order_id:
+                    raise UnusableSurcharge('Terminal response identity differs or is missing.')
+                receipt = agreement(dict(data, amount=str(parse_gateway_amount(data.get('amount')))),
+                    str(amount_dollars), required=program)
+                receipt.update(reference=normalized.get('retref'), order_id=order_id, agreement=True)
+            except UnusableSurcharge:
+                return {'ok': False, 'status': 'unknown', 'message': 'Terminal fee evidence is unusable. Inquire original reference; do not charge again.', 'retref': normalized.get('retref')}
         response_message = normalized.get('resptext') or 'Terminal payment failed.'
 
         _logger.info(
@@ -276,10 +293,11 @@ class CardPointeTerminalClient:
             'retref': normalized.get('retref'),
             'authcode': normalized.get('authcode'),
             'amount': data.get('amount'),
-            'token': normalized.get('token'),
+            'token': None if program else normalized.get('token'),
             'entrymode': normalized.get('entrymode'),
             'emvTagData': normalized.get('emvTagData'),
             'signature_captured_inline': bool(signature_value),
+            'program_receipt': receipt,
             'raw': data,
         }
 

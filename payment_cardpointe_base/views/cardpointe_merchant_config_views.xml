@@ -31,6 +31,8 @@
                         <field name="gateway_username"/>
                         <field name="gateway_password" password="True"/>
                         <field name="tokenizer_url"/>
+                        <field name="surcharge_program"/>
+                        <div class="text-muted">Card-only disclosure for an enrolled MID; does not change gateway enrollment. Disable manual markup before using this program.</div>
                         <field name="debug_logging"/>
                         <field name="timeout_connect"/>
                         <field name="timeout_read"/>

@@ -12,6 +12,7 @@ authorization, if one exists. This module turns that answer into one of:
 - ``not_found`` -- the Gateway has no transaction for this order id; nothing was charged;
 - ``unknown``   -- the inquiry itself failed or was ambiguous; nothing may be retried yet.
 """
+from odoo.addons.payment_cardpointe_base.services.surcharge import agreement, UnusableSurcharge
 import secrets
 import string
 from decimal import Decimal, InvalidOperation
@@ -63,7 +64,7 @@ def _candidates(data):
     return []
 
 
-def resolve_terminal_outcome(gateway_client, merchid, order_id, requested_amount=None):
+def resolve_terminal_outcome(gateway_client, merchid, order_id, requested_amount=None, program=False):
     """Ask the Gateway what happened to the authorization sent with ``order_id``."""
     base = {'order_id': order_id}
     try:
@@ -115,7 +116,17 @@ def resolve_terminal_outcome(gateway_client, merchid, order_id, requested_amount
             expected = Decimal(str(requested_amount)).quantize(Decimal('0.01'))
         except (InvalidOperation, TypeError, ValueError):
             expected = None
-        result['amount_matches'] = expected is None or amount == expected
+        if program:
+            if str(row.get('merchid')) != str(merchid) or row.get('orderid') != order_id or expected is None:
+                return dict(base, status='unknown', message='Gateway inquiry identity differs or is missing.')
+            try:
+                receipt = agreement(dict(row, amount=str(amount)), str(expected), required=True)
+            except UnusableSurcharge:
+                return dict(base, status='unknown', message='Gateway fee evidence differs or is missing.')
+            receipt.update(reference=row['retref'], order_id=order_id, agreement=True)
+            result.update(amount_matches=True, program_receipt=receipt, token=None)
+        else:
+            result['amount_matches'] = expected is None or amount == expected
         return result
 
     if any(str(row.get('setlstat') or '').strip().lower() == 'voided' for row in rows):
