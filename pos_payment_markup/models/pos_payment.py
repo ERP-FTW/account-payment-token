@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 from odoo.exceptions import UserError
 
 
@@ -14,6 +14,19 @@ class PosPayment(models.Model):
         ('none', 'Not applied')
     ], copy=False)
     markup_payment_reference = fields.Char(copy=False, index=True)
+
+    @api.model
+    def _load_pos_data_fields(self, config_id):
+        fields_list = super()._load_pos_data_fields(config_id)
+        # An empty native list means all fields. Do not narrow it to only
+        # fee evidence; extend explicit loaders (including CardPointe) instead.
+        if not fields_list:
+            return fields_list
+        return list(dict.fromkeys(fields_list + [
+            'markup_base_amount', 'markup_rate_applied', 'markup_amount',
+            'markup_total_amount', 'markup_amount_source',
+            'markup_payment_reference',
+        ]))
 
     def write(self, values):
         protected = {'amount', 'payment_method_id', 'pos_order_id', 'uuid'} | {

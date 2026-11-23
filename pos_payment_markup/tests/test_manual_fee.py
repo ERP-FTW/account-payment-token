@@ -3,6 +3,38 @@ from .test_pos_session import TestPosSessionMarkupLoader
 
 
 class TestPosManualFee(TestPosSessionMarkupLoader):
+    def test_payment_loader_preserves_fee_and_native_fields(self):
+        self.markup_product.taxes_id = [(5, 0, 0)]
+        self.method.write({'markup_provider_id': False, 'markup_mode': 'percentage',
+                           'manual_markup_percent': 3,
+                           'manual_markup_product_id': self.markup_product.id})
+        session = self.env['pos.session'].create({'config_id': self.pos_config.id})
+        order = self.env['pos.order'].create({
+            'session_id': session.id, 'amount_tax': 0, 'amount_total': 61.8,
+            'amount_paid': 61.8, 'amount_return': 0,
+        })
+        evidence = {'markup_base_amount': 60, 'markup_rate_applied': 3,
+                    'markup_amount': 1.8, 'markup_total_amount': 61.8,
+                    'markup_amount_source': 'local',
+                    'markup_payment_reference': 'loader-tender'}
+        payment = self.env['pos.payment'].create(dict(evidence,
+            pos_order_id=order.id, payment_method_id=self.method.id,
+            amount=61.8, uuid='loader-tender'))
+        data = {'pos.config': {'data': [{'id': self.pos_config.id}]},
+                'pos.order': {'data': [{'id': order.id}]}}
+        loaded = self.env['pos.payment'].with_user(self.pos_user)._load_pos_data(data)
+        row, = loaded['data']
+        for name, value in evidence.items():
+            self.assertEqual(row[name], value)
+        self.assertEqual(row['amount'], 61.8)
+        self.assertEqual(row['uuid'], payment.uuid)
+        self.assertEqual(row['payment_method_id'], self.method.id)
+        self.assertEqual(row['pos_order_id'], order.id)
+        if 'cardpointe_status' in payment._fields:
+            self.assertIn('cardpointe_status', row)
+        if loaded['fields']:
+            self.assertEqual(len(loaded['fields']), len(set(loaded['fields'])))
+
     def test_manual_modes_tax_rounding_and_split(self):
         self.markup_product.taxes_id = [(5, 0, 0)]
         method = self.method

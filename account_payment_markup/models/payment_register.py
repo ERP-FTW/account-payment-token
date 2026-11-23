@@ -98,7 +98,12 @@ class AccountPaymentRegister(models.TransientModel):
     def _markup_payment_eligible(self, provider=None):
         self.ensure_one()
         provider = provider or self._markup_configuration()
-        return bool(provider and provider._markup_is_configured()
+        # A register-payment wizard has no verified processor instrument.
+        # Keep explicit inbound method fees independent of gateway policy, but
+        # never turn a program-enabled provider into a local manual fallback.
+        provider_eligible = bool(provider) and (
+            provider._name != 'payment.provider' or provider._markup_card_eligible())
+        return bool(provider and provider_eligible and provider._markup_is_configured()
                     and provider.company_id == self.company_id
                     and self.payment_type == 'inbound'
                     and self.journal_id)
