@@ -3,6 +3,7 @@
 Builds synthetic records from the real fee-validation paths with fixture transports.
 The accompanying browser checks are fixture UI proof, NOT processor tests.
 """
+from uuid import uuid4
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlencode
@@ -42,7 +43,23 @@ if not order:
         result=CardPointeTerminalClient(terminal).auth_card_with_session(100,'LABTERMINALORDER','fixture-only')
     assert result['status']=='approved',result
     env['pos.payment'].create({'pos_order_id':order.id,'payment_method_id':pm.id,'amount':100,'payment_status':'done','cardpointe_retref':data['retref'],'cardpointe_terminal_order_id':data['orderid'],'cardpointe_program_receipt':result['program_receipt'],'cardpointe_ok':True,'cardpointe_status':'approved'})
-order.write({'floating_order_name':'Synthetic approved receipt'})
+# Native POS synchronization keys orders/lines/payments by UUID. ORM fixtures
+# must supply those identities too; otherwise the browser creates another draft.
+order.write({'floating_order_name':'Synthetic approved receipt', 'uuid':order.uuid or str(uuid4())})
+for line in order.lines:
+    line.write({'uuid':line.uuid or str(uuid4()), 'full_product_name':product.display_name})
+for payment in order.payment_ids:
+    payment.write({'uuid':payment.uuid or str(uuid4())})
+# A persisted ambiguous line with no reference must never start another charge.
+held=env['pos.order'].search([('pos_reference','=','SYNTHETIC-PROGRAM-HELD')],limit=1)
+if not held:
+    held=env['pos.order'].create({'session_id':config.current_session_id.id, 'uuid':str(uuid4()),
+        'pos_reference':'SYNTHETIC-PROGRAM-HELD', 'floating_order_name':'Synthetic held payment',
+        'amount_tax':0,'amount_total':100,'amount_paid':100,'amount_return':0,
+        'lines':[(0,0,{'uuid':str(uuid4()),'product_id':product.id,'full_product_name':product.display_name,
+                      'qty':1,'price_unit':100,'price_subtotal':100,'price_subtotal_incl':100,'tax_ids':[(5,0,0)]})]})
+    env['pos.payment'].create({'pos_order_id':held.id,'uuid':str(uuid4()),'payment_method_id':pm.id,
+        'amount':100,'payment_status':'retry','cardpointe_status':'unknown','cardpointe_ok':False})
 p=env.ref('payment_cardpointe.payment_provider_cardpointe')
 p.write({'state':'test','is_published':True,'cardpointe_merchant_config_id':merchant.id,'payment_method_ids':[(6,0,env.ref('payment.payment_method_card').ids)]})
 payer=env['res.partner'].search([('name','=','Synthetic browser payer')],limit=1) or env['res.partner'].create({'name':'Synthetic browser payer','country_id':env.ref('base.us').id})

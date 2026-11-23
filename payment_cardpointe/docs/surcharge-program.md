@@ -86,9 +86,12 @@ build evidence record bound to the candidate SHA.
 Browser online quote tests use Odoo's real payment-form override with the supported
 `rpc._rpc` test seam and synthetic DOM; backend transport/ORM is proven separately.
 The receipt browser uses the real controller/template over a persisted fixture.
-POS browser currently reaches the pre-authorized synthetic order payment UI,
-but its receipt assertion has FAILED and remains required build work. Do not
-interpret the matrix's named fixture/spec as an executed POS browser PASS.
+POS browser reaches the pre-authorized synthetic order payment UI, validates it,
+reads the processor total/fee/reference on the receipt, and re-reads the paid order
+and receipt from ORM. The held-line browser repeats Retry and observes the
+missing-reference reconciliation warning without any authorization request.
+Earlier scenario failures (missing native UUID fixture identities, collapsed order
+tabs and unselected payment line) remain historical failures, not final PASS.
 Authorization transport itself is separately fixture-tested.
 None of these is a full external hosted-tokenizer or physical-terminal UAT.
 
