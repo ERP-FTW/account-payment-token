@@ -237,6 +237,120 @@ class TestOnlineACH(TransactionCase):
             with self.assertRaises(ValidationError): self.submit(second)
         call.assert_not_called()
 
+    def invoice(self, amount=100):
+        receivable = self.env['account.account'].create({
+            'name': 'Synthetic installment receivable', 'code': 'INSTREC',
+            'account_type': 'asset_receivable', 'reconcile': True,
+        })
+        income = self.env['account.account'].create({
+            'name': 'Synthetic installment income', 'code': 'INSTINC',
+            'account_type': 'income',
+        })
+        self.partner.property_account_receivable_id = receivable
+        journal = self.env['account.journal'].create({
+            'name': 'Synthetic installment sales', 'code': 'INS', 'type': 'sale',
+        })
+        invoice = self.env['account.move'].create({
+            'move_type': 'out_invoice', 'partner_id': self.partner.id,
+            'journal_id': journal.id, 'currency_id': self.usd.id,
+            'invoice_line_ids': [(0, 0, {
+                'name': 'Synthetic installment item', 'quantity': 1,
+                'price_unit': amount, 'account_id': income.id,
+                'tax_ids': [(5, 0, 0)],
+            })],
+        })
+        invoice.action_post()
+        self.assertEqual(invoice.amount_residual, amount)
+        return invoice
+
+    def test_invoice_partial_exact_and_excess_before_authorization(self):
+        invoice = self.invoice()
+        for amount, allowed in [(25, True), (100, True), (100.01, False)]:
+            with self.subTest(amount=amount), self.env.cr.savepoint():
+                tx = self.tx(amount=amount)
+                tx.invoice_ids = invoice
+                with patch.object(type(self.provider), '_cp_online_request',
+                                  side_effect=lambda *a, **k: self.answer(
+                                      tx, amount='%.2f' % amount)) as call:
+                    if allowed:
+                        self.submit(tx, consent_amount='%.2f' % amount)
+                        self.assertEqual(tx.state, 'done')
+                        self.assertEqual(call.call_count, 1)
+                        self.assertEqual(call.call_args.args[:2], ('PUT', 'auth'))
+                        self.assertEqual(call.call_args.args[2]['amount'], '%.2f' % amount)
+                        self.assertEqual(tx.cp_submitted_amount, amount)
+                        # Isolate matrix rows without claiming reconciliation.
+                        tx.invoice_ids = False
+                    else:
+                        with self.assertRaises(ValidationError):
+                            self.submit(tx, consent_amount='%.2f' % amount)
+                        call.assert_not_called()
+                        self.assertFalse(tx.cp_order_id)
+
+    def test_partial_invoice_uses_remaining_balance_after_reconciliation(self):
+        invoice = self.invoice()
+        receivable = invoice.line_ids.filtered(
+            lambda line: line.account_id.account_type == 'asset_receivable')
+        journal = self.env['account.journal'].create({
+            'name': 'Synthetic installment settlement', 'code': 'IST', 'type': 'general',
+        })
+        clearing = self.env['account.account'].create({
+            'name': 'Synthetic installment clearing', 'code': 'INSTCLR',
+            'account_type': 'asset_current',
+        })
+        payment = self.env['account.move'].create({
+            'move_type': 'entry', 'journal_id': journal.id,
+            'line_ids': [(0, 0, {
+                'account_id': receivable.account_id.id, 'partner_id': self.partner.id,
+                'credit': 25, 'debit': 0,
+            }), (0, 0, {
+                'account_id': clearing.id, 'credit': 0, 'debit': 25,
+            })],
+        })
+        payment.action_post()
+        (receivable | payment.line_ids.filtered(
+            lambda line: line.account_id == receivable.account_id)).reconcile()
+        self.assertEqual(invoice.amount_residual, 75)
+        for amount, allowed in [(25, True), (75, True), (75.01, False), (100, False), (0, False)]:
+            with self.subTest(amount=amount):
+                tx = self.tx(amount=amount)
+                tx.invoice_ids = invoice
+                with patch.object(type(self.provider), '_cp_online_request',
+                                  side_effect=lambda *a, **k: self.answer(
+                                      tx, amount='%.2f' % amount)) as call:
+                    if allowed:
+                        self.submit(tx, consent_amount='%.2f' % amount)
+                        self.assertEqual(tx.state, 'done')
+                        self.assertEqual(call.call_count, 1)
+                        self.assertEqual(call.call_args.args[2]['amount'], '%.2f' % amount)
+                        tx.invoice_ids = False
+                    else:
+                        with self.assertRaises(ValidationError):
+                            self.submit(tx, consent_amount='%.2f' % amount)
+                        call.assert_not_called()
+                        self.assertFalse(tx.cp_order_id)
+
+    def test_partial_invoice_pending_and_accepted_hold_other_payer(self):
+        invoice = self.invoice()
+        first, second = self.tx(amount=25), self.tx(amount=25)
+        first.invoice_ids = second.invoice_ids = invoice
+        second.partner_id = self.env['res.partner'].create({'name': 'Synthetic second payer'})
+        with patch.object(type(self.provider), '_cp_online_request', return_value={}) as call:
+            self.submit(first, consent_amount='25.00')
+            with self.assertRaises(ValidationError):
+                self.submit(second, consent_amount='25.00')
+            self.assertEqual(call.call_count, 1)
+            self.submit(first, consent_amount='25.00')
+            self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
+        first._cp_apply_response(self.answer(first, amount='25.00'))
+        self.assertEqual(first.state, 'done')
+        self.assertFalse(first.is_post_processed)
+        with patch.object(type(self.provider), '_cp_online_request') as call:
+            with self.assertRaises(ValidationError):
+                self.submit(second, consent_amount='25.00')
+            self.submit(first, consent_amount='25.00')
+        call.assert_not_called()
+
     def test_tokenizer_ach_mode_and_no_surcharge_dependency(self):
         url=self.provider._cp_tokenizer_url('cardpointe_ach')
         for param in ['fullmobilekeyboard=true','useexpiry=false','usecvv=false','cardnumbernumericonly=false']:
