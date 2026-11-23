@@ -63,6 +63,66 @@ class TestSurcharge(TransactionCase):
                 self.assertEqual((tx.cp_receipt['subtotal'],tx.cp_receipt['fee'],tx.cp_receipt['total']),('100.00',fee,total))
                 self.assertNotIn(self.token,str(tx.read(['cp_quote','cp_quote_binding','cp_receipt'])))
 
+    def test_definite_decline_releases_payer(self):
+        for decline_fields in [{}, {'amount': '0.00'}, {
+                'amount': '100.00', 'fee_amount': '0.00',
+                'fee_type': 'SURCHRG_WAIVED'}]:
+            with self.subTest(decline_fields=decline_fields):
+                tx = self.tx()
+                qid = self.quote(tx)
+
+                def decline(method, endpoint, payload):
+                    self.assertEqual((method, endpoint), ('PUT', 'auth'))
+                    self.assertEqual(payload['amount'], '100.00')
+                    return {'ok': True, 'data': {
+                        'merchid': self.cfg.mid, 'orderid': tx.cp_order_id,
+                        'respstat': 'C', **decline_fields}}
+
+                with patch.object(type(self.p), '_cp_online_request', side_effect=decline) as call:
+                    self.assertEqual(tx._cp_process(
+                        self.token, postal='19000', quote_id=qid)['state'], 'error')
+                    self.assertEqual(tx._cp_process()['state'], 'error')
+                self.assertEqual(call.call_count, 1)
+                self.env.flush_all()
+                self.env.invalidate_all()
+                tx = self.env['payment.transaction'].browse(tx.id)
+                self.assertEqual(tx.state, 'error')
+                self.assertFalse(tx.cp_fee_hold)
+                self.assertFalse(tx.cp_receipt)
+                self.assertFalse(tx.cp_auth_evidence['approved'])
+                # A new attempt by the same payer must not be refused as unresolved.
+                following = self.tx()
+                following_qid = self.quote(following)
+                with patch.object(type(self.p), '_cp_online_request',
+                                  side_effect=lambda *a, **k: self.reply(following)) as call:
+                    self.assertEqual(following._cp_process(
+                        self.token, postal='19000', quote_id=following_qid)['state'], 'done')
+                self.assertEqual(call.call_count, 1)
+
+    def test_nonfinal_or_foreign_response_stays_pending(self):
+        for response_fields in [
+                {'respstat': 'B'},
+                {'respstat': 'C', 'merchid': 'OTHER-LAB-MERCHANT'},
+                {'respstat': 'C', 'orderid': 'OTHER-LAB-ORDER'},
+                {'respstat': 'C', 'currency': 'EUR'},
+                {'respstat': 'A', 'merchid': 'OTHER-LAB-MERCHANT'}]:
+            with self.subTest(response_fields=response_fields), self.cr.savepoint():
+                tx = self.tx()
+                qid = self.quote(tx)
+                def reply(*args):
+                    return {'ok': True, 'data': {
+                        'merchid': self.cfg.mid, 'orderid': tx.cp_order_id,
+                        **response_fields}}
+                with patch.object(type(self.p), '_cp_online_request', side_effect=reply) as call:
+                    tx._cp_process(self.token, postal='19000', quote_id=qid)
+                    tx._cp_process()
+                self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
+                self.assertEqual(tx.state, 'pending')
+                self.assertFalse(tx.cp_fee_hold)
+                self.assertFalse(tx.cp_receipt)
+                # Keep distinct payer identities for independent pending cases.
+                self.partner = self.env['res.partner'].create({'name': 'Synthetic next payer'})
+
     def test_invalid_quotes_zero_auth(self):
         for data in [{},{'token':'UNKNOWN','postal':'NOT_RESTRICTED'}, {'token':'CREDIT','postal':'NOT_RESTRICTED'},
                      {'token':'CREDIT','postal':'NOT_RESTRICTED','fee_amount':'NaN'},

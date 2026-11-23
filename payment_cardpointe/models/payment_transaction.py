@@ -211,20 +211,23 @@ class PaymentTransaction(models.Model):
             if isinstance(data.get('retref'), str) and re.fullmatch(r'[A-Za-z0-9-]{1,64}', data['retref']):
                 evidence['reference'] = data['retref']
             self.cp_auth_evidence = evidence
-        receipt = None
-        try:
-            receipt = agreement(data, '%.2f' % self.cp_submitted_amount,
-                quoted_fee=self.cp_quote['fee'] if self.cp_quote else None,
-                required=bool(self.cp_quote))
-            if not self.cp_quote and money(receipt['fee']) != 0:
-                raise UnusableSurcharge('Undisclosed gateway program fee; reconcile merchant configuration.')
-        except UnusableSurcharge:
-            matches = False
-            self.cp_fee_hold = True
         if data.get('currency') and data['currency'] != self.cp_currency_id.name:
             matches = False
         if not matches:
             return
+        # Declines do not describe a charged total and may omit fee fields.
+        # Only an identity-matched approval can establish fee agreement/hold.
+        receipt = None
+        if data.get('respstat') == 'A':
+            try:
+                receipt = agreement(data, '%.2f' % self.cp_submitted_amount,
+                    quoted_fee=self.cp_quote['fee'] if self.cp_quote else None,
+                    required=bool(self.cp_quote))
+                if not self.cp_quote and money(receipt['fee']) != 0:
+                    raise UnusableSurcharge('Undisclosed gateway program fee; reconcile merchant configuration.')
+            except UnusableSurcharge:
+                self.cp_fee_hold = True
+                return
         ref = data.get('retref')
         if data.get('respstat') == 'A' and isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9-]{1,64}',ref):
             if self.cp_fee_hold:
