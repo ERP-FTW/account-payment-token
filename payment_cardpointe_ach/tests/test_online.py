@@ -62,6 +62,18 @@ class TestOnlineACH(TransactionCase):
                 self.assertEqual(tx.cp_ach_consent_version,'one-time-ach-v1')
                 self.assertEqual(tx.cp_ach_entry_code,sec)
 
+    def test_declared_method_must_match_saved_transaction(self):
+        for method, other in [(self.card, self.ach), (self.ach, self.card)]:
+            tx = self.tx(method)
+            with patch.object(type(self.provider), "_cp_online_request") as call:
+                for declared in [None, "", other.code]:
+                    with self.assertRaises(ValidationError):
+                        tx._cp_check_payment_method(declared)
+                tx._cp_check_payment_method(method.code)
+            call.assert_not_called()
+            self.assertFalse(tx.cp_order_id)
+            self.assertFalse(tx.cp_ach_consent_text)
+
     def test_declined(self):
         tx=self.tx()
         with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx,'C')) as call:

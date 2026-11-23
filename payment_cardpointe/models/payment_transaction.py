@@ -68,6 +68,13 @@ class PaymentTransaction(models.Model):
             values['access_token'] = utils.generate_access_token(self.reference, self.partner_id.id, self.amount, self.currency_id.id, self.provider_id.id)
         return values
 
+    def _cp_check_payment_method(self, payment_method_code):
+        self.ensure_one()
+        # The hosted form selected by the payer must match this saved identity.
+        # Missing declarations (including stale browser assets) fail closed.
+        if not payment_method_code or payment_method_code != self.payment_method_id.code:
+            raise ValidationError("Payment method changed. Return to the original method to retry, or refresh before paying.")
+
     def _cp_extra_payload(self, consent, account_class, consent_amount):
         if self.payment_method_id.code != 'card':
             raise ValidationError('Unsupported CardPointe payment method.')
