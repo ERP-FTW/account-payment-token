@@ -47,35 +47,62 @@ class InternalTokenizeController(http.Controller):
         availability_report = {}
 
         # Equivalent to /my/payment_method logic but for chosen partner.
-        providers_sudo = (
-            request.env["payment.provider"]
-            .sudo()
-            .with_company(company_sudo)
-            ._get_compatible_providers(
-                company_sudo.id,
-                partner_sudo.id,
-                0.0,
-                force_tokenization=True,
-                is_validation=True,
-                report=availability_report,
-                **kwargs,
+        providers_sudo = None
+        if "payment.method" in request.env:
+            payment_methods_sudo = request.env["payment.method"]
+        else:
+            payment_methods_sudo = request.env["payment.acquirer"].browse()
+        if "payment.provider" in request.env:
+            providers_sudo = (
+                request.env["payment.provider"]
+                .sudo()
+                .with_company(company_sudo)
+                ._get_compatible_providers(
+                    company_sudo.id,
+                    partner_sudo.id,
+                    0.0,
+                    force_tokenization=True,
+                    is_validation=True,
+                    report=availability_report,
+                    **kwargs,
+                )
             )
-        )
-        payment_methods_sudo = (
-            request.env["payment.method"]
-            .sudo()
-            ._get_compatible_payment_methods(
-                providers_sudo.ids,
-                partner_sudo.id,
-                force_tokenization=True,
-                report=availability_report,
+            payment_methods_sudo = (
+                request.env["payment.method"]
+                .sudo()
+                ._get_compatible_payment_methods(
+                    providers_sudo.ids,
+                    partner_sudo.id,
+                    force_tokenization=True,
+                    report=availability_report,
+                )
             )
-        )
+        else:
+            providers_sudo = (
+                request.env["payment.acquirer"]
+                .sudo()
+                .with_company(company_sudo)
+                ._get_compatible_acquirers(
+                    company_sudo.id,
+                    partner_sudo.id,
+                    0.0,
+                    force_tokenization=True,
+                    is_validation=True,
+                    report=availability_report,
+                    **kwargs,
+                )
+            )
         tokens_sudo = request.env["payment.token"].sudo()._get_available_tokens(
             None, partner_sudo.id, is_validation=True
         )
 
-        computed_access_token = payment_utils.generate_access_token(partner_sudo.id, None, None)
+        access_token_args = [partner_sudo.id, None, None]
+        try:
+            computed_access_token = payment_utils.generate_access_token(*access_token_args)
+        except TypeError:
+            computed_access_token = payment_utils.generate_access_token(
+                partner_sudo.id, 0.0, company_sudo.currency_id.id
+            )
         landing_route = f"/payment/internal/payment_method/{partner_sudo.id}/{company_sudo.id}"
 
         payment_form_values = {
@@ -101,4 +128,7 @@ class InternalTokenizeController(http.Controller):
         if access_token:
             rendering_context["internal_access_token"] = access_token
 
-        return request.render("payment.payment_methods", rendering_context)
+        template = "payment.payment_methods"
+        if "payment.provider" not in request.env:
+            template = "payment.payment_acquirer_list"
+        return request.render(template, rendering_context)
