@@ -351,6 +351,44 @@ class TestOnlineACH(TransactionCase):
             self.submit(first, consent_amount='25.00')
         call.assert_not_called()
 
+    def test_document_amount_hook_preserves_gross_consent_and_retry(self):
+        invoice = self.invoice()
+        tx = self.tx(amount=103)
+        tx.invoice_ids = invoice
+        self.assertEqual(tx._cp_document_amount(), 103)
+        with patch.object(type(self.provider), '_cp_online_request') as call:
+            with self.assertRaises(ValidationError):
+                self.submit(tx, consent_amount='103.00')
+        call.assert_not_called()
+        self.assertFalse(tx.cp_order_id)
+        # Model a fee addon's already-validated principal allocation. The fee
+        # addon's own tests must validate that allocation and frozen fee evidence.
+        with patch.object(type(tx), '_cp_document_amount', return_value=100):
+            with patch.object(type(self.provider), '_cp_online_request', return_value={}) as call:
+                with self.assertRaises(ValidationError):
+                    self.submit(tx, consent_amount='100.00')
+                call.assert_not_called()
+                self.submit(tx, consent_amount='103.00')
+                self.assertEqual(tx.cp_submitted_amount, 103)
+                self.assertIn('103.00 USD', tx.cp_ach_consent_text)
+                self.assertEqual(call.call_args.args[2]['amount'], '103.00')
+                self.assertEqual(tx.state, 'pending')
+                other = self.tx(amount=103)
+                other.invoice_ids = invoice
+                other.partner_id = self.env['res.partner'].create({'name': 'Synthetic fee payer'})
+                with self.assertRaises(ValidationError):
+                    self.submit(other, consent_amount='103.00')
+                self.submit(tx, consent_amount='103.00')
+                self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
+            with patch.object(type(self.provider), '_cp_online_request',
+                              return_value=self.answer(tx, amount='103.00')):
+                self.submit(tx, consent_amount='103.00')
+            self.assertEqual(tx.state, 'done')
+            with patch.object(type(self.provider), '_cp_online_request') as call:
+                with self.assertRaises(ValidationError):
+                    self.submit(other, consent_amount='103.00')
+            call.assert_not_called()
+
     def test_tokenizer_ach_mode_and_no_surcharge_dependency(self):
         url=self.provider._cp_tokenizer_url('cardpointe_ach')
         for param in ['fullmobilekeyboard=true','useexpiry=false','usecvv=false','cardnumbernumericonly=false']:

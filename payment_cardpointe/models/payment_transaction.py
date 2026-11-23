@@ -72,6 +72,16 @@ class PaymentTransaction(models.Model):
                     cfg.gateway_base_url if cfg else p.cardpointe_api_base]
         return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
+    def _cp_document_amount(self):
+        """Amount allocated to linked documents, excluding validated addon fees.
+
+        The default is the full transaction amount. Fee addons may override this
+        only after validating their frozen principal/fee allocation; authorization
+        and consent must still use the full transaction amount.
+        """
+        self.ensure_one()
+        return self.amount
+
     def _cp_check_documents(self):
         # Document tuple updates force stale repeatable-read snapshots to fail,
         # including a different payer arriving through the same invoice portal.
@@ -104,7 +114,7 @@ class PaymentTransaction(models.Model):
                     raise ValidationError('The order has been cancelled.')
                 outstanding = sum(d.amount_total - d.amount_paid for d in docs)
             # Installments are valid; reject only an amount above the balance.
-            if outstanding <= 0 or self.currency_id.compare_amounts(self.amount, outstanding) > 0:
+            if outstanding <= 0 or self.currency_id.compare_amounts(self._cp_document_amount(), outstanding) > 0:
                 raise ValidationError('The document amount changed or was already paid. Refresh before paying.')
 
     _sql_constraints = [('cp_order_unique', 'unique(cp_order_id)', 'Gateway order reference must be unique.')]
