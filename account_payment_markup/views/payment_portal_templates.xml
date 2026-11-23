@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="payment_checkout_markup_disclosure" inherit_id="payment.method_form">
+        <xpath expr="//label[hasclass('o_payment_option_label')]" position="after">
+            <t t-set="markup_disclosure"
+               t-value="provider_sudo._markup_portal_disclosure(amount, currency, partner_id and request.env['res.partner'].browse(partner_id))"/>
+            <t t-call="account_payment_markup.payment_markup_disclosure"/>
+        </xpath>
+    </template>
+    <template id="payment_token_markup_disclosure" inherit_id="payment.token_form">
+        <xpath expr="//label[hasclass('o_payment_option_label')]" position="after">
+            <t t-set="markup_disclosure"
+               t-value="token_sudo.provider_id._markup_portal_disclosure(amount, currency, partner_id and request.env['res.partner'].browse(partner_id))"/>
+            <t t-call="account_payment_markup.payment_markup_disclosure"/>
+        </xpath>
+    </template>
+    <template id="payment_markup_disclosure">
+        <span t-if="markup_disclosure.get('enabled')" class="small text-muted ms-1"
+              data-markup-disclosure="server"
+              t-att-data-markup-total="markup_disclosure.get('total_amount')">
+            (base <t t-esc="markup_disclosure.get('base_amount')"
+                    t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+            + net markup <t t-esc="markup_disclosure.get('net_amount')"
+                    t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+            + tax <t t-esc="markup_disclosure.get('tax_amount')"
+                    t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+            = payable <t t-esc="markup_disclosure.get('total_amount')"
+                    t-options="{'widget': 'monetary', 'display_currency': currency}"/>)</span>
+    </template>
+</odoo>
