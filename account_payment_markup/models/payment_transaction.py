@@ -76,6 +76,7 @@ class PaymentTransaction(models.Model):
             card_type, evidence_verified=evidence_verified,
             processor_surcharge_present=surcharge_present,
             evidence_trusted=evidence_trusted,
+            payment_method_code=self.payment_method_id.code,
         )
         details = calculate_markup(
             base, provider.markup_percent, self.currency_id.round,
@@ -206,6 +207,11 @@ class PaymentTransaction(models.Model):
         # A retry/callback must reuse the original decision, never recalculate
         # using a changed provider rate or overwrite its evidence.
         if self.markup_amount_source in ('local', 'processor'):
+            if (self.markup_amount_source == 'local' and self.markup_amount
+                    and self.provider_code == 'cardpointe'
+                    and self.payment_method_id.code != 'cardpointe_ach'
+                    and self.provider_id._markup_program_enabled()):
+                raise ValidationError('Card program configuration changed after manual fee disclosure. Restart payment.')
             current_fingerprint = self._markup_current_accounting_fingerprint()
             if (self.markup_accounting_fingerprint and
                     self.markup_accounting_fingerprint != current_fingerprint):
@@ -353,6 +359,12 @@ class PaymentTransaction(models.Model):
 
     def _set_error(self, state_message):
         result = super()._set_error(state_message)
+        # The Odoo 18 online adapter reports definite declines through this
+        # native transition, not the legacy _cardpointe_fail hook. Unknown
+        # responses stay pending and must retain their frozen fee document.
+        for tx in self.filtered(lambda record: record.state == 'error'):
+            if tx.markup_fee_move_id.state == 'draft':
+                tx.markup_fee_move_id.button_cancel()
         # An error is terminal for this attempt. Release its reservation only
         # after the core transition succeeds; repeated callbacks are harmless.
         for refund in self.filtered('markup_refund_source_id'):
@@ -362,8 +374,8 @@ class PaymentTransaction(models.Model):
                 refund.write({'markup_refund_pending_amount': 0.0})
         return result
 
-    def _reconcile_after_done(self):
-        """Include the linked fee receivable in normal account.payment flow."""
+    def _create_payment(self, **extra_create_values):
+        """Include the fee receivable before Odoo 18 creates/reconciles payment."""
         for tx in self:
             if tx.markup_amount_source in ('local', 'processor') and tx.markup_amount:
                 details = {
@@ -383,7 +395,7 @@ class PaymentTransaction(models.Model):
                 tx.invoice_ids = [(4, tx.markup_fee_move_id.id)]
             if tx.markup_amount_source in ('local', 'processor') and tx.amount != tx.markup_total_amount:
                 tx.amount = tx.markup_total_amount
-        return super()._reconcile_after_done()
+        return super()._create_payment(**extra_create_values)
 
     def _set_canceled(self, state_message=None):
         for tx in self:

@@ -30,7 +30,7 @@ class PaymentProvider(models.Model):
         domain=[('type', '=', 'service')],
     )
 
-    def _markup_portal_disclosure(self, amount, currency, partner):
+    def _markup_portal_disclosure(self, amount, currency, partner, payment_method_code=None):
         """Return the server-authoritative fee breakdown for checkout."""
         self.ensure_one()
         empty = {
@@ -38,7 +38,8 @@ class PaymentProvider(models.Model):
             'net_amount': 0.0, 'tax_amount': 0.0, 'gross_amount': 0.0,
             'total_amount': currency.round(amount or 0.0),
         }
-        if not self._markup_is_configured():
+        if not self._markup_is_configured() or not self._markup_card_eligible(
+                payment_method_code=payment_method_code):
             return empty
         details = calculate_markup(
             amount, self.markup_percent, currency.round, eligible=True,
@@ -82,8 +83,16 @@ class PaymentProvider(models.Model):
         self.ensure_one()
         return bool(self.markup_enabled and self.markup_percent >= 0 and self.markup_product_id)
 
+    def _markup_program_enabled(self):
+        """Recognize the optional online adapter's actual merchant setting."""
+        self.ensure_one()
+        return self.markup_use_cardpointe_program or bool(
+            self.code == 'cardpointe' and 'cp_surcharge_program' in self._fields
+            and self.cp_surcharge_program)
+
     def _markup_card_eligible(self, card_type=None, evidence_verified=False,
-                              processor_surcharge_present=None, evidence_trusted=False):
+                              processor_surcharge_present=None, evidence_trusted=False,
+                              payment_method_code=None):
         """Accept configured manual fees or verified processor evidence.
 
         Selecting a configured provider is the explicit eligibility decision
@@ -91,7 +100,14 @@ class PaymentProvider(models.Model):
         the stricter server-trust contract and never fall back to the manual
         decision for incomplete or caller-controlled evidence.
         """
-        if self.markup_use_cardpointe_program and not (
+        manual_ach = self.code == 'cardpointe' and payment_method_code == 'cardpointe_ach'
+        # ACH is a separately configured manual fee, not a card-program fee.
+        # The online program owns its own quote/authorization; never add a
+        # locally calculated fee before it, even for claimed credit evidence.
+        online_program = ('cp_surcharge_program' in self._fields and self.cp_surcharge_program)
+        if not manual_ach and self.code == 'cardpointe' and online_program:
+            return False
+        if not manual_ach and self._markup_program_enabled() and not (
                 self.markup_cardpointe_card_available and evidence_trusted and evidence_verified
                 and self.env.context.get('server_trusted_markup_evidence') is True
                 and str(card_type or '').strip().lower() in ('credit', 'credit_card')):

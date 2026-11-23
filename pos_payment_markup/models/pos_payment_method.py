@@ -52,13 +52,24 @@ class PosPaymentMethod(models.Model):
     markup_product_id = fields.Many2one('product.product', compute='_compute_markup_provider_values')
     markup_tax_included = fields.Boolean(compute='_compute_markup_provider_values')
 
-    @api.depends('markup_mode', 'manual_markup_percent', 'manual_markup_product_id',
-                 'manual_markup_tax_included', 'markup_provider_id', 'markup_card_type',
-                 'journal_id', 'markup_provider_id.markup_enabled', 'markup_provider_id.markup_percent',
-                 'markup_provider_id.markup_product_id', 'markup_provider_id.markup_tax_included',
-                 'markup_provider_id.markup_use_cardpointe_program')
+    @api.depends(lambda self: [
+        'markup_mode', 'manual_markup_percent', 'manual_markup_product_id',
+        'manual_markup_tax_included', 'markup_provider_id', 'markup_card_type',
+        'journal_id', 'use_payment_terminal', 'markup_provider_id.markup_enabled',
+        'markup_provider_id.markup_percent', 'markup_provider_id.markup_product_id',
+        'markup_provider_id.markup_tax_included', 'markup_provider_id.markup_use_cardpointe_program',
+    ] + (['markup_provider_id.cp_surcharge_program']
+         if 'cp_surcharge_program' in self.env['payment.provider']._fields else [])
+      + (['cardpointe_config_id.merchant_config_id.surcharge_program']
+         if 'cardpointe_config_id' in self._fields else []))
     def _compute_markup_provider_values(self):
         for method in self:
+            if method._markup_terminal_program():
+                method.markup_enabled = False
+                method.markup_percent = 0.0
+                method.markup_product_id = False
+                method.markup_tax_included = False
+                continue
             if method.markup_mode != 'disabled':
                 method.markup_enabled = bool(method.manual_markup_product_id)
                 method.markup_percent = method.manual_markup_percent
@@ -66,10 +77,17 @@ class PosPaymentMethod(models.Model):
                 method.markup_tax_included = method.manual_markup_tax_included
                 continue
             provider = method._markup_provider()
-            method.markup_enabled = bool(provider and provider._markup_is_configured() and not provider.markup_use_cardpointe_program)
+            method.markup_enabled = bool(provider and provider._markup_is_configured() and not provider._markup_program_enabled())
             method.markup_percent = provider.markup_percent if provider else 0.0
             method.markup_product_id = provider.markup_product_id if provider else False
             method.markup_tax_included = provider.markup_tax_included if provider else False
+
+    def _markup_terminal_program(self):
+        self.ensure_one()
+        if self.use_payment_terminal != 'cardpointe_poc' or 'cardpointe_config_id' not in self._fields:
+            return False
+        config = self.sudo().cardpointe_config_id
+        return bool(config.merchant_config_id.surcharge_program)
 
     def _markup_provider(self):
         self.ensure_one()
@@ -96,11 +114,12 @@ class PosPaymentMethod(models.Model):
                             card_type, evidence_verified=evidence_verified,
                             processor_surcharge_present=processor_surcharge_present,
                             evidence_trusted=evidence_trusted))
+        eligible = eligible and not self._markup_terminal_program()
         details = calculate_markup(
             base_amount, self.markup_percent,
             currency.round, eligible=eligible,
             processor_amount=processor_amount if processor_amount is not None else UNSET)
-        if manual and self.markup_mode == 'fixed' and base_amount > 0:
+        if manual and eligible and self.markup_mode == 'fixed' and base_amount > 0:
             details['amount'] = currency.round(self.markup_fixed_amount)
             details['total'] = currency.round(base_amount + details['amount'])
         taxes = self.markup_product_id.taxes_id.filtered(lambda tax: tax.company_id == self.company_id)

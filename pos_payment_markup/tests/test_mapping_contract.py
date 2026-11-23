@@ -9,5 +9,9 @@ class PosMappingContractTest(TransactionCase):
         source = (root / 'models' / 'pos_payment_method.py').read_text()
         self.assertIn('markup_provider_id = fields.Many2one', source)
         self.assertIn("self.markup_card_type != 'credit'", source)
-        self.assertNotIn('self.use_payment_terminal', source)
-        self.assertNotIn('cardpointe_config_id', source)
+        # Provider mapping remains explicit; a terminal config may only suppress
+        # a local fee to avoid stacking, never implicitly select its provider.
+        mapping = source.split('    def _markup_provider(self):', 1)[1].split('\n    def ', 1)[0]
+        self.assertNotIn('self.use_payment_terminal', mapping)
+        self.assertNotIn('cardpointe_config_id', mapping)
+        self.assertIn('self.is_cash_count', mapping)

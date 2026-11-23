@@ -3,6 +3,66 @@ from .test_pos_session import TestPosSessionMarkupLoader
 
 
 class TestPosManualFee(TestPosSessionMarkupLoader):
+    def test_program_provider_projection_matches_backend(self):
+        if 'cp_surcharge_program' not in self.env['payment.provider']._fields:
+            self.skipTest('Optional online CardPointe provider is not installed')
+        provider = self.env.ref('payment_cardpointe.payment_provider_cardpointe')
+        config = self.env['cardpointe.merchant.config'].create({
+            'name': 'Synthetic projection program', 'mid': 'LAB-NONROUTABLE',
+            'surcharge_program': True,
+        })
+        provider.write({'company_id': self.company.id,
+                        'cardpointe_merchant_config_id': config.id,
+                        'markup_enabled': True, 'markup_percent': 3,
+                        'markup_product_id': self.markup_product.id,
+                        'markup_use_cardpointe_program': False})
+        self.method.write({'markup_mode': 'disabled', 'markup_provider_id': provider.id,
+                           'markup_card_type': 'credit'})
+        data = {'pos.config': {'data': [{'id': self.pos_config.id}]}}
+        def loaded():
+            rows = self.env['pos.payment.method'].with_user(self.pos_user)._load_pos_data(data)['data']
+            return next(row for row in rows if row['id'] == self.method.id)
+        self.assertFalse(loaded()['markup_enabled'])
+        self.assertEqual(self.method._markup_preview(100)['amount'], 0)
+        # Dependency invalidation must follow the actual merchant configuration.
+        config.surcharge_program = False
+        self.assertTrue(loaded()['markup_enabled'])
+        self.assertEqual(self.method._markup_preview(100)['amount'], 3)
+        config.surcharge_program = True
+        self.assertFalse(loaded()['markup_enabled'])
+        # Ordinary explicitly configured manual tenders remain independent.
+        self.method.write({'markup_mode': 'percentage', 'manual_markup_percent': 3,
+                           'manual_markup_product_id': self.markup_product.id})
+        self.assertTrue(loaded()['markup_enabled'])
+        self.assertEqual(self.method._markup_preview(100)['amount'], 3)
+
+    def test_terminal_program_suppresses_manual_and_provider_fees(self):
+        if 'cardpointe_config_id' not in self.method._fields:
+            self.skipTest('Optional POS CardPointe terminal not installed')
+        merchant = self.env['cardpointe.merchant.config'].create({
+            'name': 'Synthetic terminal program', 'mid': 'LAB-NONROUTABLE',
+            'surcharge_program': True})
+        terminal = self.env['pos.cardpointe.terminal.config'].create({
+            'name': 'Synthetic terminal', 'merchant_config_id': merchant.id})
+        self.method.write({'use_payment_terminal': 'cardpointe_poc',
+                           'cardpointe_config_id': terminal.id,
+                           'manual_markup_product_id': self.markup_product.id,
+                           'manual_markup_percent': 3, 'markup_fixed_amount': 2})
+        data = {'pos.config': {'data': [{'id': self.pos_config.id}]}}
+        for mode in ('disabled', 'percentage', 'fixed'):
+            with self.subTest(mode=mode):
+                self.method.markup_mode = mode
+                rows = self.env['pos.payment.method'].with_user(self.pos_user)._load_pos_data(data)['data']
+                row = next(row for row in rows if row['id'] == self.method.id)
+                self.assertFalse(row['markup_enabled'])
+                self.assertFalse(row['markup_product_id'])
+                preview = self.method.with_user(self.pos_user)._markup_preview(100)
+                self.assertFalse(preview['eligible'])
+                self.assertEqual(preview['amount'], 0)
+        merchant.surcharge_program = False
+        self.assertTrue(self.method.with_user(self.pos_user).markup_enabled)
+        self.assertEqual(self.method.with_user(self.pos_user)._markup_preview(100)['amount'], 2)
+
     def test_payment_loader_preserves_fee_and_native_fields(self):
         self.markup_product.taxes_id = [(5, 0, 0)]
         self.method.write({'markup_provider_id': False, 'markup_mode': 'percentage',
