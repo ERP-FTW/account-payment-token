@@ -4,7 +4,10 @@ from odoo import http
 from odoo.http import request
 
 from odoo.addons.pos_cardpointe_poc.controllers.main import PosCardPointeController
-from odoo.addons.pos_cardpointe_poc.services.cardpointe_terminal import CardPointeTerminalClient
+from odoo.addons.pos_cardpointe_poc.services.cardpointe_terminal import (
+    CardPointeTerminalClient,
+    dollars_to_implied_cents,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -101,6 +104,9 @@ class PosCardPointeTippingController(PosCardPointeController):
                 tip_amount = float(tip_result.get('tip_amount') or 0.0)
                 total_amount = base_amount + tip_amount
 
+            # Use the exact submitted cents for approval validation, recovery,
+            # and the POS tender. Binary sums (e.g. 19.99 + 3.99) are not money.
+            total_amount = int(dollars_to_implied_cents(total_amount)) / 100
             signature_required_pre_auth = self._signature_required_pre_auth(config, total_amount)
             terminal_order_id = self._terminal_order_id(config)
             try:

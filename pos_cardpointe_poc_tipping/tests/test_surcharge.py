@@ -71,6 +71,52 @@ class TestTippingProgram(TestTerminalProgram):
                 else:
                     self.assertFalse(result.get('program_receipt'))
 
+    def test_cent_valued_tip_program_agreement(self):
+        self.terminal.enable_tips = True
+        self.main_pos_config.write({
+            'iface_tipproduct': True,
+            'tip_product_id': self.env['product.product'].create({
+                'name': 'Synthetic cents tip', 'type': 'service',
+                'available_in_pos': True, 'taxes_id': [(5, 0, 0)],
+            }).id,
+        })
+        for override, expected in [({}, 'approved'),
+                                   ({'fee_amount': '0.73'}, 'unknown'),
+                                   ({'merchid': 'FOREIGN'}, 'unknown')]:
+            with self.subTest(override=override), patch.object(
+                CardPointeTerminalClient, 'tip_with_session',
+                return_value={'ok': True, 'tip_amount': 3.99},
+            ):
+                started = self.make_jsonrpc_request('/pos_cardpointe_poc/start', {
+                    'pos_config_id': self.main_pos_config.id,
+                    'payment_method_id': self.pm.id, 'amount': 19.99,
+                    'currency': 'USD', 'order_uid': 'synthetic-cents-order',
+                    'payment_line_uuid': 'synthetic-cents-line',
+                })
+                self.assertEqual(started['status'], 'ready', started)
+                self.fake.auth_card.update(
+                    amount='24.70', fee_amount='0.72', fee_type='SURCHRG',
+                    merchid=self.merchant.mid, orderid=started['terminal_order_id'],
+                )
+                self.fake.auth_card.update(override)
+                result = self.make_jsonrpc_request('/pos_cardpointe_poc/auth', {
+                    'request_id': started['request_id'], 'amount': 19.99,
+                })
+                self.assertEqual(self.fake.paths('v4/authCard')[-1]['json']['amount'], '2398')
+                self.assertEqual(result['status'], expected, result)
+                if expected == 'approved':
+                    self.assertTrue(result['cardpointe_tip_prompted'])
+                    self.assertEqual(result['cardpointe_tip_amount'], 3.99)
+                    self.assertEqual(result['cardpointe_total_amount'], 23.98)
+                    receipt = result['program_receipt']
+                    self.assertEqual(receipt['subtotal'], '23.98')
+                    self.assertEqual(receipt['fee'], '0.72')
+                    self.assertEqual(receipt['total'], '24.70')
+                    self.assertEqual(receipt['order_id'], started['terminal_order_id'])
+                    self.assertTrue(receipt['agreement'])
+                else:
+                    self.assertFalse(result.get('program_receipt'))
+
     def test_decline_does_not_expose_program_receipt(self):
         self.fake.auth_card.update(respstat='C', respcode='05', resptext='Declined')
         result = self.auth(self.start())
