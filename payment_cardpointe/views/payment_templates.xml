@@ -1,0 +1,9 @@
+<odoo>
+  <template id="inline_form">
+    <div class="o_cp_form" t-att-data-method="pm_sudo.code">
+      <iframe class="o_cp_iframe w-100" title="Secure Fiserv payment form"
+        t-att-src="provider_sudo._cp_tokenizer_url(pm_sudo.code)" style="min-height:380px;border:0"/>
+      <p class="o_cp_notice">Enter payment details only in the secure Fiserv form.</p>
+    </div>
+  </template>
+</odoo>
