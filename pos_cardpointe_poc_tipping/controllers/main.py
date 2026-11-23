@@ -153,6 +153,9 @@ class PosCardPointeTippingController(PosCardPointeController):
                     'respcode': result.get('respcode'),
                     'resptext': result.get('resptext'),
                     'amount': result.get('amount'),
+                    # Keep the validated processor fee separate from Odoo tender
+                    # and the native tip, even when terminal tips are disabled.
+                    'program_receipt': result.get('program_receipt'),
                     'token': result.get('token'),
                     'entrymode': result.get('entrymode'),
                     'emvTagData': result.get('emvTagData'),
