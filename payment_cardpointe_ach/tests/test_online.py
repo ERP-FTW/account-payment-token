@@ -216,4 +216,8 @@ class TestOnlineACH(TransactionCase):
         url=self.provider._cp_tokenizer_url('cardpointe_ach')
         for param in ['fullmobilekeyboard=true','useexpiry=false','usecvv=false','cardnumbernumericonly=false']:
             self.assertIn(param,url)
-        self.assertFalse(self.env['ir.module.module'].search([('name','ilike','surcharge'),('state','=','installed')]))
+        self.assertFalse(self.env['ir.module.module'].search([
+            ('state', '=', 'installed'), '|',
+            ('name', 'in', ['account_payment_markup', 'pos_payment_markup']),
+            ('name', 'ilike', 'surcharge'),
+        ]))
