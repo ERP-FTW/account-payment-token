@@ -57,7 +57,8 @@ class PaymentTransaction(models.Model):
                 if any(d.state == 'cancel' for d in docs):
                     raise ValidationError('The order has been cancelled.')
                 outstanding = sum(d.amount_total - d.amount_paid for d in docs)
-            if outstanding <= 0 or self.currency_id.compare_amounts(self.amount, outstanding):
+            # Installments are valid; reject only an amount above the balance.
+            if outstanding <= 0 or self.currency_id.compare_amounts(self.amount, outstanding) > 0:
                 raise ValidationError('The document amount changed or was already paid. Refresh before paying.')
 
     _sql_constraints = [('cp_order_unique', 'unique(cp_order_id)', 'Gateway order reference must be unique.')]
