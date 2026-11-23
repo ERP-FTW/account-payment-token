@@ -1,0 +1,9 @@
+<odoo noupdate="1">
+  <record id="payment_provider_cardpointe" model="payment.provider">
+    <field name="name">CardPointe</field><field name="code">cardpointe</field>
+    <field name="state">disabled</field>
+    <field name="inline_form_view_id" ref="inline_form"/>
+    <field name="payment_method_ids" eval="[(6, 0, [ref('payment.payment_method_card')])]"/>
+    <field name="allow_tokenization" eval="False"/>
+  </record>
+</odoo>
