@@ -36,7 +36,9 @@ class TestOnlineManualFee(TransactionCase):
         self.ach = self.env.ref('payment_cardpointe_ach.payment_method_ach')
         self.card = self.env.ref('payment.payment_method_card')
         self.cfg = self.env['cardpointe.merchant.config'].create({
-            'name': 'Synthetic online fee config', 'mid': 'LAB-NONROUTABLE', 'surcharge_program': False})
+            'name': 'Synthetic online fee config', 'mid': 'LAB-NONROUTABLE', 'surcharge_program': False,
+            # Render only; HTTP is fenced below and no browser loads this URL.
+            'tokenizer_url': 'https://synthetic.cardconnect.com/itoke/ajax-tokenizer.html'})
         self.p.write({'state': 'test', 'is_published': True, 'journal_id': self.bank.id,
             'cardpointe_merchant_config_id': self.cfg.id,
             'payment_method_ids': [(6, 0, (self.ach | self.card).ids)],
