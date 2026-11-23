@@ -113,18 +113,19 @@ class AccountInvoiceTokenWizard(models.TransientModel):
 
         invoice = self.invoice_id
         token = self.token_id
-        provider = token.provider_id
+        provider = token.provider_id if hasattr(token, "provider_id") else token.acquirer_id
 
         if not provider:
             raise UserError(_("The selected token is not linked to a payment provider."))
 
-        # NEW: Odoo 18 requires payment_method_id on payment.transaction
-        payment_method = token.payment_method_id
-        if not payment_method:
-            raise UserError(_(
-                "The selected token has no Payment Method set, so Odoo cannot create a transaction.\n"
-                "Recreate the token via an online payment flow with 'Save payment method'."
-            ))
+        payment_method = token.payment_method_id if hasattr(token, "payment_method_id") else None
+        if "payment_method_id" in self.env["payment.transaction"]._fields and not payment_method:
+            raise UserError(
+                _(
+                    "The selected token has no Payment Method set, so Odoo cannot create a transaction.\n"
+                    "Recreate the token via an online payment flow with 'Save payment method'."
+                )
+            )
 
         # Log intent before creating the transaction
         _logger.info(
@@ -136,8 +137,8 @@ class AccountInvoiceTokenWizard(models.TransientModel):
             token.id,
             provider.display_name,
             provider.id,
-            payment_method.display_name,
-            payment_method.id,
+            payment_method.display_name if payment_method else None,
+            payment_method.id if payment_method else None,
             self.amount,
             invoice.currency_id.name,
         )
@@ -152,21 +153,27 @@ class AccountInvoiceTokenWizard(models.TransientModel):
                      "currency": invoice.currency_id.name,
                      "token": token.display_name,
                      "provider": provider.display_name,
-                     "pm": payment_method.display_name,
+                     "pm": payment_method.display_name if payment_method else _("N/A"),
                  }
         )
 
         tx_vals = {
-            "provider_id": provider.id,
-            "payment_method_id": payment_method.id,  # <-- NEW (required)
             "token_id": token.id,
             "partner_id": invoice.partner_id.commercial_partner_id.id,
             "amount": self.amount,
             "currency_id": invoice.currency_id.id,
             "operation": "online_token",
-            "invoice_ids": [Command.set([invoice.id])],
             "company_id": invoice.company_id.id,
         }
+        tx_fields = self.env["payment.transaction"]._fields
+        provider_field = "provider_id" if "provider_id" in tx_fields else "acquirer_id"
+        tx_vals[provider_field] = provider.id
+        if "payment_method_id" in tx_fields and payment_method:
+            tx_vals["payment_method_id"] = payment_method.id
+        if "invoice_ids" in tx_fields:
+            tx_vals["invoice_ids"] = [Command.set([invoice.id])]
+        elif "invoice_id" in tx_fields:
+            tx_vals["invoice_id"] = invoice.id
 
         tx = self.env["payment.transaction"].create(tx_vals)
 
@@ -187,7 +194,15 @@ class AccountInvoiceTokenWizard(models.TransientModel):
         )
 
         # Request provider to perform the token payment.
-        tx._send_payment_request()
+        send_payment = getattr(tx, "_send_payment_request", None)
+        if send_payment:
+            send_payment()
+        else:
+            send_payment = getattr(tx, "send_payment_request", None)
+            if send_payment:
+                send_payment()
+            else:
+                raise UserError(_("This Odoo version cannot send payment requests."))
 
         # Provider may update state sync/async; we record current state for visibility
         invoice.message_post(
