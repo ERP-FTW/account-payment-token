@@ -195,6 +195,10 @@ class PaymentTransaction(models.Model):
         self.invalidate_recordset()
         if self.state in ('done', 'authorized', 'error', 'cancel'):
             return
+        if self.cp_fee_hold:
+            # A contradictory approval requires manual reconciliation; neither
+            # a later decline nor an approval may silently release this hold.
+            return
         data = response.get('data') if isinstance(response, dict) else None
         if not isinstance(response, dict) or not response.get('ok') or not isinstance(data, dict):
             return
@@ -230,8 +234,6 @@ class PaymentTransaction(models.Model):
                 return
         ref = data.get('retref')
         if data.get('respstat') == 'A' and isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9-]{1,64}',ref):
-            if self.cp_fee_hold:
-                return  # A contradictory response requires manual reconciliation, not a later silent override.
             self.provider_reference = ref
             if self.cp_quote:
                 self.cp_receipt = dict(receipt, reference=ref, order_id=self.cp_order_id, currency=self.cp_currency_id.name, agreement=True)

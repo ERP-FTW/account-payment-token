@@ -163,15 +163,52 @@ class TestSurcharge(TransactionCase):
         self.assertEqual(call.call_count,1); self.assertEqual(tx.state,'done')
 
     def test_mismatch_remains_held_after_inquiry(self):
-        tx=self.tx(); qid=self.quote(tx)
-        with patch.object(type(self.p),'_cp_online_request',side_effect=lambda *a,**k:self.reply(tx,'4.00','104.00')):
-            tx._cp_process(self.token,postal='19000',quote_id=qid)
-        self.assertTrue(tx.cp_fee_hold); self.assertEqual(tx.state,'pending'); self.assertFalse(tx.cp_receipt)
-        self.env.flush_all(); self.env.invalidate_all()
-        self.assertEqual(tx.cp_auth_evidence['amount'],'104.00')
-        self.assertEqual(tx.cp_auth_evidence['fee_amount'],'4.00')
-        with patch.object(type(self.p),'_cp_online_request',return_value=self.reply(tx)) as call: tx._cp_process()
-        self.assertEqual(call.call_args.args[0],'GET'); self.assertEqual(tx.state,'pending')
+        for inquiry_fields in [
+                {'respstat': 'C'},
+                {'respstat': 'C', 'amount': '0.00'},
+                {'respstat': 'C', 'amount': '100.00', 'fee_amount': '0.00',
+                 'fee_type': 'SURCHRG_WAIVED'},
+                {'respstat': 'A', 'amount': '103.00', 'fee_amount': '3.00'},
+                {'respstat': 'A', 'amount': '104.00', 'fee_amount': '4.00'}]:
+            with self.subTest(inquiry_fields=inquiry_fields):
+                # Each held transaction needs its own payer for independent cases.
+                self.partner = self.env['res.partner'].create({'name': 'Synthetic held payer'})
+                tx = self.tx()
+                qid = self.quote(tx)
+
+                def send(method, endpoint, payload=None):
+                    if method == 'PUT':
+                        self.assertEqual(endpoint, 'auth')
+                        assert payload is not None
+                        self.assertEqual(payload['amount'], '100.00')
+                        return self.reply(tx, '4.00', '104.00')
+                    self.assertEqual((method, endpoint), ('GET',
+                        'inquireByOrderid/%s/%s' % (tx.cp_order_id, self.cfg.mid)))
+                    response = self.reply(tx)
+                    response['data'].update(inquiry_fields)
+                    return response
+
+                with patch.object(type(self.p), '_cp_online_request', side_effect=send) as call:
+                    self.assertEqual(tx._cp_process(
+                        self.token, postal='19000', quote_id=qid)['state'], 'pending')
+                    self.assertTrue(tx.cp_fee_hold)
+                    original_evidence = dict(tx.cp_auth_evidence)
+                    for _ in range(2):
+                        self.assertEqual(tx._cp_process()['state'], 'pending')
+                        self.env.flush_all()
+                        self.env.invalidate_all()
+                        tx = self.env['payment.transaction'].browse(tx.id)
+                        self.assertEqual(tx.state, 'pending')
+                        self.assertTrue(tx.cp_fee_hold)
+                        self.assertFalse(tx.cp_receipt)
+                        self.assertFalse(tx.provider_reference)
+                        self.assertEqual(tx.cp_auth_evidence, original_evidence)
+                    following = self.tx()
+                    with self.assertRaisesRegex(ValidationError, 'A previous payment is unresolved'):
+                        following._cp_process(self.token, postal='19000')
+                self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET', 'GET'])
+                self.assertEqual(tx.cp_auth_evidence['amount'], '104.00')
+                self.assertEqual(tx.cp_auth_evidence['fee_amount'], '4.00')
 
     def test_surcharge_http_uses_query_not_body_and_sanitizes_error(self):
         secret=secrets.token_hex(16)
