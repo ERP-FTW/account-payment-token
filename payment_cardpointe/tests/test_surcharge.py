@@ -220,6 +220,33 @@ class TestSurcharge(TransactionCase):
             result=self.p._cp_online_request('GET','surcharge',{'token':secret})
         self.assertNotIn(secret,str(result)); self.assertNotIn(secret,str(log.mock_calls))
 
+    def test_manual_conflict_override_keeps_legacy_fees_guard(self):
+        with patch.object(type(self.p), '_cp_manual_markup_conflict', return_value=False):
+            self.p._cp_check_surcharge_configuration()
+            with patch.object(type(self.p), '_fields', dict(
+                    self.p._fields, fees_active=self.p._fields['cp_surcharge_program'])):
+                original = type(self.p).__getitem__
+                with patch.object(type(self.p), '__getitem__',
+                                  lambda record, key: True if key == 'fees_active' else original(record, key)):
+                    with self.assertRaises(ValidationError):
+                        self.p._cp_check_surcharge_configuration()
+            # Admitting a fee integration never invents a local card surcharge:
+            # unusable quotes refuse; explicit zero remains zero; auth uses principal.
+            tx = self.tx()
+            with patch.object(type(self.p), '_cp_online_request', return_value={}) as call:
+                self.assertEqual(tx._cp_process(self.token, postal='19000')['state'], 'quote_error')
+            self.assertEqual(call.call_count, 1)
+            self.assertFalse(tx.cp_order_id)
+            qid = self.quote(tx, {'token': 'DEBIT', 'postal': 'NOT_RESTRICTED'})
+            with patch.object(type(self.p), '_cp_online_request',
+                              side_effect=lambda *a, **k: self.reply(tx, '0.00', '100.00', 'SURCHRG_WAIVED')) as call:
+                tx._cp_process(self.token, postal='19000', quote_id=qid)
+            self.assertEqual(call.call_count, 1)
+            self.assertEqual(call.call_args.args[2]['amount'], '100.00')
+            self.assertNotIn('fee_amount', call.call_args.args[2])
+            self.assertEqual(tx.cp_receipt['fee'], '0.00')
+            self.assertEqual(tx.cp_receipt['total'], '100.00')
+
     def test_manual_program_guard_and_card_only(self):
         with patch.object(type(self.p),'_fields',dict(self.p._fields, markup_enabled=self.p._fields['cp_surcharge_program'])):
             # Stub only the optional module's field value, not the guard.
