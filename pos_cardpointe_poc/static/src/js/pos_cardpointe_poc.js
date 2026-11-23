@@ -383,7 +383,11 @@ export class CardPointePOC extends PaymentInterface {
     }
 
     _applyApprovedCardPointeResult(line, result, captureMethod = "terminal") {
-        const approvedAmount = this._normalizeAmount(result.amount, line.amount);
+        // The processor fee is outside the sale subtotal. Never treat it as
+        // tender/change against the Odoo order or apply a second manual markup.
+        const approvedAmount = result.program_receipt
+            ? Number(result.program_receipt.subtotal) : this._normalizeAmount(result.amount, line.amount);
+        line.cardpointe_program_receipt = result.program_receipt || false;
         line.set_amount(approvedAmount);
         line.cardpointe_retref = result.retref || "";
         line.cardpointe_authcode = result.authcode || "";

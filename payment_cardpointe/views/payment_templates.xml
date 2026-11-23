@@ -4,6 +4,24 @@
       <iframe class="o_cp_iframe w-100" title="Secure Fiserv payment form"
         t-att-src="provider_sudo._cp_tokenizer_url(pm_sudo.code)" style="min-height:380px;border:0"/>
       <p class="o_cp_notice">Enter payment details only in the secure Fiserv form.</p>
+      <div t-if="pm_sudo.code == 'card' and provider_sudo.cp_surcharge_program" class="o_cp_program">
+        <label>Cardholder postal code <input class="o_cp_postal form-control" autocomplete="postal-code" maxlength="10"/></label>
+        <p>Eligible credit cards are subject to a gateway surcharge. Pay first requests a quote; no authorization is sent until you confirm it.</p>
+        <p class="o_cp_quote_text" role="status"/>
+        <label><input type="checkbox" class="o_cp_quote_confirm"/> I accept the quoted total. Press Pay again to authorize.</label>
+      </div>
     </div>
+  </template>
+  <template id="program_receipt" name="CardPointe gateway receipt">
+    <t t-call="web.frontend_layout"><div class="container o_cp_receipt">
+      <h1>CardPointe payment receipt</h1>
+      <p>Gateway authorization accepted; settlement is not certified.</p>
+      <dl><dt>Subtotal</dt><dd t-out="receipt['subtotal']"/>
+        <dt>Gateway surcharge</dt><dd t-out="receipt['fee']"/>
+        <dt>Total charged</dt><dd t-out="receipt['total']"/>
+        <dt>Currency</dt><dd t-out="receipt['currency']"/>
+        <dt>Reference</dt><dd t-out="receipt['reference']"/></dl>
+      <a href="/payment/status">Continue</a>
+    </div></t>
   </template>
 </odoo>

@@ -43,6 +43,12 @@ paymentForm.include({
         const form = this._getInlineForm(radio).querySelector('.o_cp_form');
         const iframe = form.querySelector('iframe');
         const ach = form.querySelector('.o_cp_ach');
+        const program = form.querySelector('.o_cp_program');
+        if (program?.dataset.quoteId && !program.querySelector('.o_cp_quote_confirm').checked) {
+            this._displayErrorDialog(_t('Quote confirmation required'), _t('Accept the displayed total before authorizing.'));
+            this._enableButton();
+            return;
+        }
         // Persist only the Odoo processing identity, NEVER the hosted token. A lost
         // response/reload therefore inquires the same gateway order, not a new debit.
         const key = 'cp-checkout:' + JSON.stringify([this.paymentContext.transactionRoute, this.paymentContext.partnerId, this.paymentContext.amount, this.paymentContext.currencyId, paymentOptionId, paymentMethodCode]);
@@ -73,7 +79,20 @@ paymentForm.include({
                 consent: ach ? ach.querySelector('.o_cp_consent').checked : null,
                 account_class: ach?.querySelector('.o_cp_account_class:checked')?.value || null,
                 consent_amount: ach?.dataset.consentAmount || null,
+                postal: program?.querySelector('.o_cp_postal').value || null,
+                quote_id: program?.dataset.quoteId || null,
             });
+            if (result.state === 'quote' || result.state === 'quote_error') {
+                if (program) {
+                    program.dataset.quoteId = result.quote_id || '';
+                    program.querySelector('.o_cp_quote_confirm').checked = false;
+                    program.querySelector('.o_cp_quote_text').textContent = result.quote
+                        ? `Subtotal ${result.quote.subtotal}; gateway fee ${result.quote.fee}; total ${result.quote.total} ${result.quote.currency}. Quote valid for five minutes.`
+                        : result.message;
+                }
+                this._enableButton();
+                return;
+            }
             this._cpTokens?.clear();
             if (['done', 'authorized', 'error', 'cancel'].includes(result.state)) sessionStorage.removeItem(key);
             window.location = result.redirect_url || '/payment/status';

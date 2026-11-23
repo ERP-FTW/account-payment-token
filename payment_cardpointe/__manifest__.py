@@ -5,6 +5,14 @@
     'depends': ['payment_cardpointe_base', 'account_payment'],
     'post_init_hook': 'post_init_hook',
     'data': ['views/payment_templates.xml', 'data/payment_provider.xml'],
-    'assets': {'web.assets_frontend': ['payment_cardpointe/static/src/js/payment_form.js']},
+    'assets': {
+        'web.assets_frontend': ['payment_cardpointe/static/src/js/payment_form.js'],
+        'web.qunit_suite_tests': [
+            'web/static/src/legacy/js/public/public_widget.js',
+            'payment/static/src/js/payment_form.js',
+            'payment_cardpointe/static/src/js/payment_form.js',
+            'payment_cardpointe/static/tests/program_tests.js',
+        ],
+    },
     'installable': True,
 }

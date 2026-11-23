@@ -74,6 +74,19 @@ class TestOnlineACH(TransactionCase):
             self.assertFalse(tx.cp_order_id)
             self.assertFalse(tx.cp_ach_consent_text)
 
+    def test_enrolled_program_is_card_only_not_ach(self):
+        cfg=self.env['cardpointe.merchant.config'].create({'name':'Synthetic enrolled ACH exclusion','mid':'LAB-NONROUTABLE','surcharge_program':True})
+        self.provider.cardpointe_merchant_config_id=cfg
+        tx=self.tx()
+        with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx)) as call:
+            self.submit(tx)
+        self.assertEqual(call.call_count,1)
+        self.assertEqual(call.call_args.args[:2],('PUT','auth'))
+        self.assertEqual(call.call_args.args[2]['accttype'],'ECHK')
+        self.assertNotIn('fee_amount',call.call_args.args[2])
+        self.assertFalse(tx.cp_quote)
+        self.assertEqual(tx.state,'done')
+
     def test_declined(self):
         tx=self.tx()
         with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx,'C')) as call:

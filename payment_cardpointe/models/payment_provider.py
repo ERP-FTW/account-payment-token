@@ -1,11 +1,18 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-from odoo import models
+from odoo import fields, models
 from odoo.exceptions import ValidationError
 
 
 class PaymentProvider(models.Model):
     _inherit = 'payment.provider'
+
+    cp_surcharge_program = fields.Boolean(related='cardpointe_merchant_config_id.surcharge_program', readonly=False)
+
+    def _cp_check_surcharge_configuration(self):
+        self.ensure_one()
+        if self.cp_surcharge_program and any(name in self._fields and self[name] for name in ('markup_enabled', 'fees_active')):
+            raise ValidationError('CardPointe program and manual payment fee cannot be combined. Disable manual markup before paying.')
 
     def _get_default_payment_method_codes(self):
         return ['card'] if self.code == 'cardpointe' else super()._get_default_payment_method_codes()

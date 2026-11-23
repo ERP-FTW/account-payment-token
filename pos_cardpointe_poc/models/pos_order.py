@@ -7,6 +7,7 @@ class PosOrder(models.Model):
     def _payment_fields(self, order, ui_paymentline):
         values = super()._payment_fields(order, ui_paymentline)
         values.update({
+            'cardpointe_program_receipt': ui_paymentline.get('cardpointe_program_receipt'),
             'cardpointe_retref': ui_paymentline.get('cardpointe_retref'),
             'cardpointe_authcode': ui_paymentline.get('cardpointe_authcode'),
             'cardpointe_respcode': ui_paymentline.get('cardpointe_respcode'),

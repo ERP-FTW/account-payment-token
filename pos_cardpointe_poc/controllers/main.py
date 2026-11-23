@@ -105,6 +105,8 @@ class PosCardPointeController(http.Controller):
         if not payment_method.cardpointe_manual_entry_enabled:
             return {'status': 'error', 'message': 'Manual Entry is disabled for this payment method.'}
         merchant_config = self._resolve_merchant_config(config)
+        if merchant_config and merchant_config.surcharge_program:
+            return {'status': 'error', 'message': 'Program surcharging requires terminal disclosure. Manual entry is not available for this enrolled configuration.'}
         if not merchant_config:
             return {'status': 'error', 'message': 'CardPointe merchant config missing on terminal config.'}
         if not merchant_config.tokenizer_url:
@@ -144,6 +146,8 @@ class PosCardPointeController(http.Controller):
             return {'status': 'error', 'message': 'Missing CardPointe token for manual entry.'}
 
         merchant_config = self._resolve_merchant_config(config).sudo()
+        if merchant_config and merchant_config.surcharge_program:
+            return {'status': 'error', 'message': 'Program surcharging requires terminal disclosure. Manual entry is not available for this enrolled configuration.'}
         if not merchant_config:
             return {'status': 'error', 'message': 'CardPointe merchant config missing on terminal config.'}
         if not merchant_config.gateway_username or not merchant_config.gateway_password:
@@ -247,6 +251,8 @@ class PosCardPointeController(http.Controller):
         _payment_method, config, error = self._validate_start_payload(pos_config_id, payment_method_id)
         if error:
             return error
+        if config.merchant_config_id.surcharge_program and any(name in _payment_method._fields and _payment_method[name] for name in ('markup_enabled', 'fees_active')):
+            return {'status': 'error', 'message': 'Disable manual payment markup before using the CardPointe program.'}
         # The runtime lock lives on the terminal configuration, which cashiers may read but not
         # write: maintain it as superuser once the caller has been authorized above.
         config = config.sudo()
@@ -411,6 +417,7 @@ class PosCardPointeController(http.Controller):
                     'signature_captured': signature_captured,
                     'signature_method': signature_method,
                     'terminal_order_id': terminal_order_id,
+                    'program_receipt': result.get('program_receipt'),
                     'recovered': bool(result.get('recovered')),
                 }
 
@@ -549,6 +556,7 @@ class PosCardPointeController(http.Controller):
             }
         outcome = resolve_terminal_outcome(
             CardPointeGatewayClient(merchant_config), merchant_config.mid, terminal_order_id, amount,
+            program=bool(merchant_config.surcharge_program),
         )
         status = outcome.get('status')
         if status == 'approved' and not outcome.get('amount_matches'):
@@ -569,6 +577,8 @@ class PosCardPointeController(http.Controller):
             }
         if status == 'approved':
             return dict(outcome, ok=True)
+        if status == 'not_found' and merchant_config.surcharge_program:
+            return {'ok': False, 'status': 'unknown', 'message': 'No matching record yet. Keep the original reference; do not charge again.'}
         if status in ('not_found', 'voided'):
             return {
                 'ok': False,

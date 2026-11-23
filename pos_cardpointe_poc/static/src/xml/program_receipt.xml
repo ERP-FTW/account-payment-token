@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="pos_cardpointe_poc.ProgramReceipt" t-inherit="point_of_sale.OrderReceipt" t-inherit-mode="extension">
+    <xpath expr="//div[hasclass('paymentlines')]" position="inside">
+      <div t-if="line.cardpointe_program_receipt" class="cardpointe-program-receipt">
+        <t t-set="cp" t-value="line.cardpointe_program_receipt"/>
+        <div>CardPointe subtotal: <t t-esc="cp.subtotal"/></div>
+        <div>Gateway surcharge: <t t-esc="cp.fee"/></div>
+        <div>Total charged by processor: <t t-esc="cp.total"/></div>
+        <div>Reference: <t t-esc="cp.reference"/></div>
+        <div>To cover the cost of accepting credit cards, we collected the gateway surcharge shown above.</div>
+      </div>
+    </xpath>
+  </t>
+</templates>
