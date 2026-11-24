@@ -326,15 +326,18 @@ class PaymentTransaction(models.Model):
         })
         return values
 
-    def _send_refund_request(self, amount_to_refund=None):
-        self.ensure_one()
-        requested = amount_to_refund or abs(self.amount)
+    def _create_child_transaction(self, amount, is_refund=False, **custom_create_values):
+        # Odoo 19 dispatches refunds on the child, after creating it here.
+        # Freeze its fee evidence before the adapter can complete or reject it.
+        child = super()._create_child_transaction(
+            amount, is_refund=is_refund, **custom_create_values)
+        if not is_refund:
+            return child
+        requested = abs(amount)
         fee_cap = self._markup_refund_cap(requested)
-        refund_tx = super()._send_refund_request(amount_to_refund=amount_to_refund)
-        if refund_tx and fee_cap:
-            fee_cap = self._markup_reserve_refund(fee_cap)
-        if refund_tx and fee_cap:
-            refund_tx.write({
+        fee_cap = self._markup_reserve_refund(fee_cap)
+        if fee_cap:
+            child.write({
                 'markup_base_amount': self.currency_id.round(requested - fee_cap),
                 'markup_net_amount': -fee_cap,
                 'markup_amount': -fee_cap,
@@ -345,11 +348,12 @@ class PaymentTransaction(models.Model):
                 'markup_refund_source_id': self.id,
                 'markup_refund_pending_amount': fee_cap,
             })
-        return refund_tx
+        return child
 
-    def _set_done(self, state_message=None):
-        result = super()._set_done(state_message)
-        for refund in self.filtered('markup_refund_source_id'):
+    def _set_done(self, *, state_message=None, extra_allowed_states=()):
+        result = super()._set_done(
+            state_message=state_message, extra_allowed_states=extra_allowed_states)
+        for refund in result.filtered('markup_refund_source_id'):
             source = refund.markup_refund_source_id
             pending = refund.markup_refund_pending_amount
             if source and pending:
@@ -357,17 +361,18 @@ class PaymentTransaction(models.Model):
                 refund.write({'markup_refund_pending_amount': 0.0})
         return result
 
-    def _set_error(self, state_message):
-        result = super()._set_error(state_message)
+    def _set_error(self, state_message, extra_allowed_states=()):
+        result = super()._set_error(
+            state_message, extra_allowed_states=extra_allowed_states)
         # The Odoo 18 online adapter reports definite declines through this
         # native transition, not the legacy _cardpointe_fail hook. Unknown
         # responses stay pending and must retain their frozen fee document.
-        for tx in self.filtered(lambda record: record.state == 'error'):
+        for tx in result:
             if tx.markup_fee_move_id.state == 'draft':
                 tx.markup_fee_move_id.button_cancel()
         # An error is terminal for this attempt. Release its reservation only
         # after the core transition succeeds; repeated callbacks are harmless.
-        for refund in self.filtered('markup_refund_source_id'):
+        for refund in result.filtered('markup_refund_source_id'):
             pending = refund.markup_refund_pending_amount
             if pending:
                 refund.markup_refund_source_id._markup_release_refund_reservation(pending)
@@ -397,8 +402,10 @@ class PaymentTransaction(models.Model):
                 tx.amount = tx.markup_total_amount
         return super()._create_payment(**extra_create_values)
 
-    def _set_canceled(self, state_message=None):
-        for tx in self:
+    def _set_canceled(self, state_message=None, extra_allowed_states=()):
+        result = super()._set_canceled(
+            state_message, extra_allowed_states=extra_allowed_states)
+        for tx in result:
             if tx.markup_refund_source_id:
                 pending = tx.markup_refund_pending_amount
                 if pending:
@@ -412,7 +419,7 @@ class PaymentTransaction(models.Model):
             # Keep the canceled move linked for audit. A later approved retry
             # sees the canceled state and creates one fresh fee move.
             tx.write({'markup_invoice_line_id': False})
-        return super()._set_canceled(state_message)
+        return result
 
     def _cardpointe_charge_from_token(self, token, meta=None, flow=None, save_payment_method=False,
                                       capture=None, amount=None, success_message=None):

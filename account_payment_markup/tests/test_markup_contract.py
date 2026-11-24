@@ -39,7 +39,7 @@ class MarkupContractTest(TransactionCase):
 
     def test_original_evidence_refund_cap_is_integrated(self):
         source = (ROOT / 'models' / 'payment_transaction.py').read_text()
-        self.assertIn('def _send_refund_request', source)
+        self.assertIn('def _create_child_transaction', source)
         self.assertGreaterEqual(source.count('_markup_refund_cap('), 3)
 
     def test_refund_tax_base_uses_company_currency_precision(self):

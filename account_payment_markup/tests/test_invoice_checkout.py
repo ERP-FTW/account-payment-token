@@ -86,6 +86,58 @@ class TestInvoiceCheckout(TransactionCase):
         self.assertEqual(html.count('data-markup-disclosure="server"'), 1)
         self.assertIn('data-markup-total="103.0"', html)
 
+    def test_native_done_and_refund_child_lifecycle(self):
+        from unittest.mock import patch
+
+        tx = self._transaction()
+        tx._get_processing_values()
+        self.assertEqual(tx._set_done(), tx)
+        self.assertEqual(tx.state, 'done')
+        self.assertFalse(tx._set_done(state_message='Repeated completion'))
+        self.provider.state = 'test'
+
+        def complete(refund):
+            # Evidence must exist before the provider receives the request.
+            self.assertEqual(refund.markup_refund_source_id, tx)
+            self.assertEqual(refund.markup_refund_pending_amount, abs(refund.amount))
+            refund._set_done(state_message='Synthetic refund')
+
+        with patch.object(type(tx), '_send_refund_request', complete):
+            first = tx._refund(1)
+        self.assertEqual(first.state, 'done')
+        self.assertEqual(tx.markup_refunded_amount, 1)
+        first._set_done()
+        self.assertEqual(tx.markup_refunded_amount, 1)
+        self.assertEqual(tx.markup_refund_pending_amount, 0)
+
+        # A pending child reserves capacity until a real terminal transition.
+        with patch.object(type(tx), '_send_refund_request', lambda refund: None):
+            pending = tx._refund(2)
+        self.assertEqual(tx.markup_refund_pending_amount, 2)
+        pending._set_error('Synthetic decline')
+        pending._set_error('Repeated decline')
+        self.assertEqual(tx.markup_refund_pending_amount, 0)
+        with patch.object(type(tx), '_send_refund_request', lambda refund: None):
+            canceled = tx._refund(2)
+        canceled._set_canceled(state_message='Synthetic cancel')
+        self.assertEqual(tx.markup_refund_pending_amount, 0)
+        with patch.object(type(tx), '_send_refund_request', complete):
+            final = tx._refund(2)
+        self.assertEqual(final.state, 'done')
+        self.assertEqual(tx.markup_refunded_amount, 3)
+        self.assertEqual(tx.markup_refund_pending_amount, 0)
+
+    def test_rejected_cancel_does_not_remove_fee(self):
+        tx = self._transaction()
+        tx._get_processing_values()
+        tx._set_done()
+        fee = tx.markup_fee_move_id
+        self.assertFalse(tx._set_canceled())
+        self.assertEqual(fee.state, 'draft')
+        self.assertEqual(tx._set_canceled(extra_allowed_states=('done',)), tx)
+        self.assertEqual(fee.state, 'cancel')
+        self.assertEqual(tx._set_done(extra_allowed_states=('cancel',)), tx)
+
     def test_disabled_checkout_remains_principal_without_fee(self):
         self.provider.markup_enabled = False
         tx = self._transaction()
