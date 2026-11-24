@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="account_journal_manual_fee" model="ir.ui.view">
+        <field name="name">account.journal.manual.payment.fee</field>
+        <field name="model">account.journal</field>
+        <field name="inherit_id" ref="account.view_account_journal_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='inbound_payment_method_line_ids']/list/field[@name='name']" position="after">
+                <field name="markup_mode" optional="show"/>
+                <field name="markup_percent" optional="show" invisible="markup_mode != 'percentage'"/>
+                <field name="markup_fixed_amount" optional="show" invisible="markup_mode != 'fixed'"/>
+                <field name="markup_product_id" optional="show" required="markup_mode != 'disabled'"/>
+                <field name="markup_tax_included" optional="show"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
