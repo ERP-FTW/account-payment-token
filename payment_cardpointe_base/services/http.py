@@ -70,7 +70,7 @@ def redact_payload(obj):
     return obj
 
 
-def request_json(method, url, headers=None, json=None, timeout=30, verify=True, auth=None):
+def request_json(method, url, headers=None, json=None, timeout=30, verify=True, auth=None, params=None):
     """Perform an HTTP request and return (status_code, headers_dict, text, json_or_none)."""
     try:
         import requests
@@ -80,6 +80,7 @@ def request_json(method, url, headers=None, json=None, timeout=30, verify=True, 
             url=url,
             headers=headers,
             json=json,
+            params=params,
             timeout=timeout,
             verify=verify,
             auth=auth,
