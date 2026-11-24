@@ -125,6 +125,13 @@ class PaymentTransaction(models.Model):
             values['access_token'] = utils.generate_access_token(self.reference, self.partner_id.id, self.amount, self.currency_id.id, self.provider_id.id)
         return values
 
+    def _cp_check_provider(self, provider_id):
+        self.ensure_one()
+        # Bind the displayed provider to the saved processing identity before
+        # any quote or authorization. A stale checkout must never switch MID.
+        if isinstance(provider_id, bool) or str(provider_id) != str(self.provider_id.id):
+            raise ValidationError('Payment provider changed. Refresh the checkout; reconcile any earlier attempt before paying.')
+
     def _cp_check_payment_method(self, payment_method_code):
         self.ensure_one()
         # The hosted form selected by the payer must match this saved identity.

@@ -52,7 +52,7 @@ patch(PaymentForm.prototype, {
         }
         // Persist only the Odoo processing identity, NEVER the hosted token. A lost
         // response/reload therefore inquires the same gateway order, not a new debit.
-        const key = 'cp-checkout:' + JSON.stringify([this.paymentContext.transactionRoute, this.paymentContext.partnerId, this.paymentContext.amount, this.paymentContext.currencyId, paymentOptionId, paymentMethodCode]);
+        const key = 'cp-checkout:' + JSON.stringify([this.paymentContext.transactionRoute, this.paymentContext.partnerId, this.paymentContext.amount, this.paymentContext.currencyId, this.paymentContext.providerId, paymentOptionId, paymentMethodCode]);
         let values;
         try {
             const saved = sessionStorage.getItem(key);
@@ -76,6 +76,7 @@ patch(PaymentForm.prototype, {
             const result = await rpc('/payment/cardpointe/process', {
                 reference: values.reference, access_token: values.access_token,
                 payment_method_code: paymentMethodCode,
+                provider_id: this.paymentContext.providerId,
                 token: this._cpTokens?.get(iframe) || null,
                 consent: ach ? ach.querySelector('.o_cp_consent').checked : null,
                 account_class: ach?.querySelector('.o_cp_account_class:checked')?.value || null,

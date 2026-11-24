@@ -27,6 +27,16 @@ class TestSurcharge(TransactionCase):
     def tx(self):
         return self.env['payment.transaction'].create({'provider_id':self.p.id,'payment_method_id':self.card.id,'reference':secrets.token_hex(8), 'amount':100,'currency_id':self.env.ref('base.USD').id,'partner_id':self.partner.id,'operation':'online_direct'})
 
+    def test_selected_provider_must_match_saved_transaction(self):
+        tx = self.tx()
+        tx._cp_check_provider(self.p.id)
+        tx._cp_check_provider(str(self.p.id))
+        for wrong in (None, False, True, self.p.id + 100, 'invalid'):
+            with self.subTest(provider=wrong), self.assertRaises(ValidationError):
+                tx._cp_check_provider(wrong)
+        self.assertFalse(tx.cp_order_id)
+        self.assertEqual(tx.state, 'draft')
+
     def quote(self, tx, data=None):
         with patch.object(type(self.p),'_cp_online_request',return_value={'ok':True,'data':data or {'token':'CREDIT','postal':'NOT_RESTRICTED','fee_amount':'3.00'}}) as call:
             result=tx._cp_process(self.token,postal='19000')
