@@ -52,7 +52,7 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
     if payload is not None and 'Content-Type' not in request_headers:
         request_headers['Content-Type'] = 'application/json'
 
-    if provider.cardpointe_debug_logging:
+    if provider.cardpointe_debug_logging and not provider.env.context.get('cardpointe_online_private'):
         _logger.info(
             "[CARDPOINTE] request method=%s endpoint=%s url=%s tx_ref=%s correlation_id=%s headers=%s payload=%s",
             method,
@@ -78,14 +78,15 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
             method=method,
             url=url,
             headers=request_headers,
-            json=payload,
+            json=None if endpoint == 'surcharge' else payload,
+            **({'params': payload} if endpoint == 'surcharge' else {}),
             timeout=request_timeout,
             auth=(provider.cardpointe_username or '', provider.cardpointe_password or ''),
         )
     except CardPointeRequestError as exc:
         lower = str(exc).lower()
         error_code = 'timeout' if 'timeout' in lower else 'request_error'
-        error_message = _("CardPointe request timed out.") if error_code == 'timeout' else str(exc)
+        error_message = _("CardPointe request timed out.") if error_code == 'timeout' else _("CardPointe request failed.")
         if 'name or service not known' in lower or 'failed to establish a new connection' in lower:
             error_code = 'connection_error'
             error_message = _("CardPointe connection error.")
@@ -101,7 +102,7 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
     response_data = response_data or {}
     response_text_snippet = safe_truncate(response_text, limit=200)
 
-    if provider.cardpointe_debug_logging:
+    if provider.cardpointe_debug_logging and not provider.env.context.get('cardpointe_online_private'):
         body = redact_payload(response_data) if response_data else response_text_snippet
         _logger.info(
             "[CARDPOINTE] response correlation_id=%s http_status=%s body=%s",
@@ -117,7 +118,7 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
             url,
             correlation_id,
             http_status,
-            redact_payload(response_data) if response_data else response_text_snippet,
+            '[online response omitted]' if provider.env.context.get('cardpointe_online_private') else (redact_payload(response_data) if response_data else response_text_snippet),
         )
         error_message = response_data.get('message') or response_data.get('error')
         if not error_message and response_text_snippet:

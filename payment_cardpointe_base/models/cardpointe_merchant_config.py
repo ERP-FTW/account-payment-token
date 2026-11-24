@@ -19,6 +19,8 @@ class CardPointeMerchantConfig(models.Model):
                                    help='Gateway API password. Required before any Gateway call.')
     tokenizer_url = fields.Char()
     debug_logging = fields.Boolean()
+    surcharge_program = fields.Boolean(string='Card-only gateway surcharge program',
+        help='Enable disclosure and reconciliation for an enrolled MID. Does not enroll, disable or override the gateway program. Never combine with manual markup.')
     timeout_connect = fields.Integer(default=10)
     timeout_read = fields.Integer(default=30)
 
