@@ -1,0 +1,7 @@
+# POS Payment Markup
+
+Depends on `account_payment_markup` for provider settings and shared percentage arithmetic. A POS payment method is explicitly mapped to a configured provider and marked as credit-card eligible; cash, unmapped and unknown methods remain fee-free. Terminal use does not disable this manual configuration path.
+
+The Odoo 16 POS asset extends the exported `models.Payment` class. Pending fees recalculate from the unpaid allocation, the approved amount is authoritative and frozen across export/reload, and the mapped service product is loaded so the order receives a distinct fee line. In manual mode the approved amount must exactly match the already disclosed provider-configured total. Browser JSON still cannot claim processor evidence: any supplied processor evidence must carry the server-adapter provenance stamp.
+
+Manual fees use the mapped provider's configured percentage without CardPointe enrollment or surcharge-endpoint evidence. If future processor evidence is supplied, it remains eligible only with `provenance=cardpointe-server`, `server_verified`, current-instrument credit evidence, and explicit `surcharge_present=False`; incomplete or forged evidence fails closed. Backend order processing validates the fee source, amount, total, currency, and final tender against the provider calculation, and generated fee lines are tagged through the Odoo 16 order API so repeated recalculation/cash switching cannot leave duplicates.

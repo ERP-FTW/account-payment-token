@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="pos_payment_method_form_markup" model="ir.ui.view">
+        <field name="name">POS Payment Markup Provider Mapping</field>
+        <field name="model">pos.payment.method</field>
+        <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
+        <field name="arch" type="xml">
+            <field name="journal_id" position="after">
+                <field name="markup_provider_id"/>
+                <label for="markup_card_type" string="Markup card evidence"/>
+                <field name="markup_card_type" placeholder="credit"/>
+                <div class="text-muted">Only explicit credit/card evidence enables markup; display names are never used.</div>
+            </field>
+        </field>
+    </record>
+</odoo>
