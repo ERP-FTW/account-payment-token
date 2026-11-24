@@ -33,12 +33,15 @@ class PaymentProvider(models.Model):
     def _markup_portal_disclosure(self, amount, currency, partner, payment_method_code=None):
         """Return the server-authoritative fee breakdown for checkout."""
         self.ensure_one()
+        # Odoo's save-payment-method form has no amount or currency. It
+        # validates a token, not a checkout: never quote a fee on that form.
+        base_amount = currency.round(amount or 0.0) if currency else 0.0
         empty = {
-            'enabled': False, 'base_amount': currency.round(amount or 0.0),
+            'enabled': False, 'base_amount': base_amount,
             'net_amount': 0.0, 'tax_amount': 0.0, 'gross_amount': 0.0,
-            'total_amount': currency.round(amount or 0.0),
+            'total_amount': base_amount,
         }
-        if not self._markup_is_configured() or not self._markup_card_eligible(
+        if not currency or not self._markup_is_configured() or not self._markup_card_eligible(
                 payment_method_code=payment_method_code):
             return empty
         details = calculate_markup(

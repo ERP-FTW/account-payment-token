@@ -59,6 +59,23 @@ class TestInvoiceCheckout(TransactionCase):
             'operation': 'online_direct', 'invoice_ids': [(6, 0, self.invoice.ids)],
         })
 
+    def test_validation_form_has_no_markup_disclosure(self):
+        # The native /my/payment_method and contact Add Card routes pass
+        # neither an amount nor a currency, even when markup is configured.
+        for enabled in (True, False):
+            with self.subTest(markup_enabled=enabled):
+                self.provider.markup_enabled = enabled
+                disclosure = self.provider._markup_portal_disclosure(
+                    None, None, self.partner, 'card',
+                )
+                self.assertFalse(disclosure['enabled'])
+                self.assertEqual(disclosure['total_amount'], 0)
+                html = str(self.env['ir.qweb']._render(
+                    'account_payment_markup.payment_markup_disclosure',
+                    {'markup_disclosure': disclosure, 'currency': None},
+                ))
+                self.assertNotIn('data-markup-disclosure', html)
+
     def test_enabled_checkout_has_one_fee_on_repeated_processing(self):
         tx = self._transaction()
         first = tx._get_processing_values()

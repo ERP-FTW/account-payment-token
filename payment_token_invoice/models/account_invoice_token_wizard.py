@@ -113,7 +113,10 @@ class AccountInvoiceTokenWizard(models.TransientModel):
 
         invoice = self.invoice_id
         token = self.token_id
-        provider = token.provider_id
+        # Billing users may charge an accessible invoice/token, but native
+        # Odoo restricts provider configuration reads to administrators.
+        # Elevate only this metadata read, never the invoice, token or charge.
+        provider = token.provider_id.sudo()
 
         if not provider:
             raise UserError(_("The selected token is not linked to a payment provider."))

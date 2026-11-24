@@ -1,6 +1,6 @@
 {
     'name': 'Account Payment Markup',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.0.1',
     'category': 'Accounting/Payment Providers',
     'summary': 'Provider-scoped card payment markup calculation and invoice payment support',
     'depends': ['account', 'payment'],
