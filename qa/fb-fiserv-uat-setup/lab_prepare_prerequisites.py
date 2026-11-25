@@ -11,7 +11,7 @@ import json
 from odoo import Command
 
 
-assert env.cr.dbname == "guild_t_7179e09b", "PROOF LAB ONLY"
+assert env.cr.dbname.startswith("guild_"), "DISPOSABLE ODOO LAB ONLY"
 company = env.company
 company.write({
     "name": "Counter Shop Demo",

@@ -80,9 +80,13 @@ A passing receipt has schema
 file SHA-256 values, `native_invoice_transition=account.move.action_post`,
 `external_payment_effect=false`, and `secret_fields_in_payload=false`.
 
-The producer then qualifies the exact candidate in a fresh own lab. The
-commands below show the supported sequence; use the producer's own task-scoped
-lab name and exact candidate source:
+The producer then qualifies the exact candidate in a fresh own lab. The proof
+scripts accept any database created by the supported `odoo-lab` runtime
+(`env.cr.dbname` begins with `guild_`) and refuse non-lab/client databases. They
+are intentionally independent of the producer task ID so an independent
+reviewer can run the committed scripts unchanged in a reviewer-owned lab. The
+commands below show the supported sequence; use the current worker's own
+task-scoped lab name and exact candidate source:
 
 ```bash
 LAB_TASK="${HERMES_KANBAN_TASK}-fiserv-setup"
@@ -101,6 +105,9 @@ odoo-lab install --task "$LAB_TASK" --module payment_cardpointe
 odoo-lab install --task "$LAB_TASK" --module account_payment_markup_cardpointe
 # Prepare non-routable lab-only prerequisites; never run this script on stage.
 odoo-lab shell --task "$LAB_TASK" --command "$(<proof/lab_prepare_prerequisites.py)"
+# Prove one ambiguous symbolic relation refuses before any fixture ORM mutation,
+# then removes its temporary duplicate and leaves the lab ready for installation.
+odoo-lab shell --task "$LAB_TASK" --command "$(<proof/lab_test_ambiguous_relation.py)"
 odoo-lab install --task "$LAB_TASK" --module fb_fiserv_uat_fixture
 odoo-lab shell --task "$LAB_TASK" --command "$(<proof/lab_verify.py)"
 # Re-run the exact hook in the disposable lab to prove convergence/no duplicates.
@@ -112,9 +119,13 @@ odoo-lab gate --task "$LAB_TASK" --module fb_fiserv_uat_fixture \
 ```
 
 The proof preparation uses only a non-routable lab merchant and creates no
-payment transaction. The authoritative proof is the two identical PASS
-readbacks around the second hook invocation, plus a PASS gate. The producer
-must use a fresh lab; never replay a paid Demo invoice from earlier evidence.
+payment transaction. The ambiguity proof temporarily creates a second
+non-routable merchant relation, guards every ORM `create`/`write` entry point,
+requires the exact two-record refusal, verifies fixture state is unchanged,
+and removes the duplicate before normal installation. The authoritative proof
+is its PASS result, the two identical PASS readbacks around the second hook
+invocation, and a PASS gate. The producer and reviewer must each use a fresh lab;
+never replay a paid Demo invoice from earlier evidence.
 
 ## Packet and independent review
 
@@ -122,16 +133,18 @@ The same canonical packet must contain:
 
 - the exact candidate commit containing `fb_fiserv_uat_fixture/`;
 - `fb-fiserv-uat-fixture-qualification.json`;
-- fresh-lab prepare/install/readback logs and gate receipt;
+- fresh-lab preparation and ambiguity-refusal logs, install/readback logs, and
+  gate receipt;
 - the three unchanged scalar configuration artifacts;
 - the CardPointe UAT selector package and all prior portable-v3 evidence;
 - an implementation plan that installs the fixture addon only after exact
   candidate deployment and a completed stage backup.
 
 Independent review repeats the qualification and fresh-lab install under the
-reviewer's own lab identity. It must inspect that the hook has no secret-field
-access or external-effect method and that the second invocation creates no
-additional customer or invoice.
+reviewer's own lab identity using the committed proof scripts unchanged. It must
+run the ambiguity-refusal proof, inspect that the hook has no secret-field
+access or external-effect method, and prove that the second invocation creates
+no additional customer or invoice.
 
 ## Reviewed stage execution
 

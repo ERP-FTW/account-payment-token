@@ -3,7 +3,7 @@
 import json
 
 
-assert env.cr.dbname == "guild_t_7179e09b", "PROOF LAB ONLY"
+assert env.cr.dbname.startswith("guild_"), "DISPOSABLE ODOO LAB ONLY"
 company = env.ref("fb_fiserv_uat_fixture.company")
 partner = env.ref("fb_fiserv_uat_fixture.customer")
 cardpointe = env.ref("fb_fiserv_uat_fixture.cardpointe_provider")
