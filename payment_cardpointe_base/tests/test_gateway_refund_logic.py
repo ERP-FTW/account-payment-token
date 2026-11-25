@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 CURRENT_DIR = os.path.dirname(__file__)
 BASE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
@@ -32,6 +33,38 @@ _load_services_module('http', 'http.py')
 _load_services_module('money', 'money.py')
 gateway = _load_services_module('gateway', 'gateway.py')
 refunds = _load_services_module('refunds', 'refunds.py')
+
+
+class TestGatewayCredentials(unittest.TestCase):
+    def setUp(self):
+        self.client = gateway.CardPointeGatewayClient(types.SimpleNamespace(
+            gateway_base_url='https://sandbox.invalid/cardconnect/rest/',
+            gateway_username='test-user', gateway_password='test-password',
+        ))
+
+    def test_root_put_accepts_the_servlet_banner(self):
+        banner = '<html lang="en"><body><h1>CardConnect REST Servlet</h1></body></html>'
+        with patch.object(gateway, 'request_json', return_value=(
+                200, {'Content-Type': 'text/html'}, banner, None)) as send:
+            self.assertTrue(self.client.test_credentials('test-mid')['ok'])
+        send.assert_called_once_with(
+            method='PUT', url='https://sandbox.invalid/cardconnect/rest/',
+            headers={'Accept': '*/*', 'Content-Type': 'application/json'},
+            json={'merchid': 'test-mid'}, timeout=20, auth=('test-user', 'test-password'),
+        )
+
+    def test_unexpected_body_and_http_errors_fail(self):
+        for status, text in [(200, 'Maintenance'), (401, 'Unauthorized'), (406, 'Not Acceptable')]:
+            with self.subTest(status=status), patch.object(
+                    gateway, 'request_json', return_value=(status, {}, text, None)):
+                result = self.client.test_credentials('test-mid')
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['http_status'], status)
+
+    def test_inquiry_still_requests_json(self):
+        with patch.object(gateway, 'request_json', return_value=(200, {}, '{}', {})) as send:
+            self.client.inquire('test-ref', 'test-mid')
+        self.assertEqual(send.call_args.kwargs['headers'], {'Accept': 'application/json'})
 
 
 class _GatewayStub:
