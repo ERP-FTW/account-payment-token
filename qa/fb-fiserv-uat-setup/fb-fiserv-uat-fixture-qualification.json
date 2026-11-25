@@ -1,0 +1,55 @@
+{
+  "candidate_contract": {
+    "company": "Counter Shop Demo",
+    "currency": "USD",
+    "customer_email": "fiserv-uat@example.invalid",
+    "external_payment_effect": false,
+    "invoice_cases": [
+      {
+        "amount": 10.0,
+        "key": "success",
+        "ref": "FB-UAT-success"
+      },
+      {
+        "amount": 10.0,
+        "key": "decline",
+        "ref": "FB-UAT-decline"
+      },
+      {
+        "amount": 100.0,
+        "key": "markup_on",
+        "ref": "FB-UAT-markup_on"
+      },
+      {
+        "amount": 100.0,
+        "key": "markup_off",
+        "ref": "FB-UAT-markup_off"
+      },
+      {
+        "amount": 10.0,
+        "key": "token_portable_v3",
+        "ref": "FB-UAT-token-portable-v3"
+      }
+    ],
+    "native_invoice_transition": "account.move.action_post",
+    "secret_fields_in_payload": false
+  },
+  "files": {
+    "__init__.py": {
+      "bytes": 34,
+      "sha256": "da2fed4255bc688861d67d7452bfc8d856db5d81846e3063c7bb5c73bfc28657"
+    },
+    "__manifest__.py": {
+      "bytes": 590,
+      "sha256": "5fbac426b9e6a24ab562170604d6c84a9254fd81944e8c62903edd34e5c14692"
+    },
+    "hooks.py": {
+      "bytes": 12971,
+      "sha256": "10cba3fb49e57ddc9bc1282aa403ae6a5efb69525926f2ce13192860abf206c8"
+    }
+  },
+  "findings": [],
+  "module": "fb_fiserv_uat_fixture",
+  "schema": "hermes-fb-fiserv-uat-fixture-qualification/v1",
+  "status": "PASS"
+}

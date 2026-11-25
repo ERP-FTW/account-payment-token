@@ -1,0 +1,21 @@
+{
+    "name": "Full Belly Fiserv UAT Fixture",
+    "version": "19.0.1.0.0",
+    "summary": "Reviewed, idempotent stage records for the Full Belly Fiserv UAT matrix",
+    "author": "Full Belly Farm",
+    "license": "LGPL-3",
+    "depends": [
+        "account",
+        "payment",
+        "payment_demo",
+        "payment_cardpointe_base",
+        "payment_cardpointe",
+        "account_payment_markup",
+        "account_payment_markup_cardpointe",
+    ],
+    "data": [],
+    "post_init_hook": "post_init_hook",
+    "application": False,
+    "auto_install": False,
+    "installable": True,
+}
