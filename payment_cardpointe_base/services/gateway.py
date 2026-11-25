@@ -41,7 +41,7 @@ class CardPointeGatewayClient:
     def _url(self, path):
         return f"{self.base_url}/{path.lstrip('/')}"
 
-    def _request(self, method, path, payload=None, timeout=30):
+    def _request(self, method, path, payload=None, timeout=30, *, accept='application/json'):
         if not self.config.gateway_username or not self.config.gateway_password:
             # Nothing was sent: this is a configuration gap, never an unknown outcome.
             return {
@@ -51,7 +51,7 @@ class CardPointeGatewayClient:
                 'error_code': 'credentials_missing',
             }
         url = self._url(path)
-        headers = {'Accept': 'application/json'}
+        headers = {'Accept': accept}
         if payload is not None:
             headers['Content-Type'] = 'application/json'
 
@@ -130,7 +130,8 @@ class CardPointeGatewayClient:
         Gateway checks that the MID matches the credentials and answers "CardConnect REST Servlet".
         Nothing is authorized or charged.
         """
-        result = self._request('PUT', '', payload={'merchid': merchid}, timeout=20)
+        # The root endpoint returns a servlet banner and accepts a JSON request body.
+        result = self._request('PUT', '', payload={'merchid': merchid}, timeout=20, accept='*/*')
         result['ok'] = bool(
             result.get('ok') and 'cardconnect rest servlet' in (result.get('text') or '').lower()
         )

@@ -50,7 +50,7 @@ class CardPointeMerchantConfig(models.Model):
             message = _("CardPointe accepted the credentials for MID %(mid)s at %(url)s.",
                         mid=self.mid, url=self.gateway_base_url)
         else:
-            message = _("CardPointe did not accept the credentials (HTTP %(status)s): %(detail)s",
+            message = _("CardPointe credential check failed (HTTP %(status)s): %(detail)s",
                         status=result.get('http_status') or '-',
                         detail=(result.get('message') or result.get('text') or '')[:200])
         return {
