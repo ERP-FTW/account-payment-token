@@ -38,6 +38,9 @@ class TestOnlineACH(TransactionCase):
         data.update(changes)
         return {'ok':True,'data':data}
 
+    def test_method_has_required_form_image(self):
+        self.assertTrue(self.ach.image, 'The payment method form requires an image to save.')
+
     def test_enabled_combinations_payload_and_consent(self):
         for key, acct, sec in [('consumer_checking','ECHK','WEB'),('consumer_savings','ESAV','WEB'),('business_checking','ECHK','CCD'),('business_savings','ESAV','CCD')]:
             with self.subTest(account_class=key):
