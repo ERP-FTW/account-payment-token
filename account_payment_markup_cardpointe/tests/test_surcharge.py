@@ -88,7 +88,7 @@ class TestSurcharge(TransactionCase):
                     self.assertEqual((method, endpoint), ('PUT', 'auth'))
                     self.assertEqual(payload['amount'], '100.00')
                     return {'ok': True, 'data': {
-                        'merchid': self.cfg.mid, 'orderid': tx.cp_order_id,
+                        'merchid': self.cfg.mid, 'orderId': tx.cp_order_id,
                         'respstat': 'C', **decline_fields}}
 
                 with patch.object(type(self.p), '_cp_online_request', side_effect=decline) as call:
@@ -103,6 +103,7 @@ class TestSurcharge(TransactionCase):
                 self.assertFalse(tx.cp_fee_hold)
                 self.assertFalse(tx.cp_receipt)
                 self.assertFalse(tx.cp_auth_evidence['approved'])
+                self.assertTrue(tx.cp_auth_evidence['identity_matches'])
                 # A new attempt by the same payer must not be refused as unresolved.
                 following = self.tx()
                 following_qid = self.quote(following)

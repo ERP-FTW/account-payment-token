@@ -152,6 +152,13 @@ class PaymentTransaction(models.Model):
         self._cp_apply_response(response)
         return {'state': self.state, 'redirect_url': '/payment/status'}
 
+    def _cp_matches_gateway_transaction(self, data):
+        # CardPointe uses orderId in inquiries and orderid in other replies.
+        order_ids = [data[key] for key in ('orderId', 'orderid') if key in data]
+        return bool(self.cp_order_id and self.cp_merchant_id and order_ids
+                    and str(data.get('merchid')) == self.cp_merchant_id
+                    and all(order_id == self.cp_order_id for order_id in order_ids))
+
     def _cp_apply_response(self, response):
         self.env.cr.execute('SELECT id FROM payment_transaction WHERE id=%s FOR UPDATE', [self.id])
         self.invalidate_recordset()
@@ -160,10 +167,9 @@ class PaymentTransaction(models.Model):
         data = response.get('data') if isinstance(response, dict) else None
         if not isinstance(response, dict) or not response.get('ok') or not isinstance(data, dict):
             return
-        matches = str(data.get('merchid')) == self.cp_merchant_id and data.get('orderid') == self.cp_order_id
+        if not self._cp_matches_gateway_transaction(data):
+            return
         if data.get('currency') and data['currency'] != self.cp_currency_id.name:
-            matches = False
-        if not matches:
             return
         ref = data.get('retref')
         if data.get('respstat') == 'A' and isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9-]{1,64}',ref):

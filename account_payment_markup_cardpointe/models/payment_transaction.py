@@ -79,8 +79,7 @@ class PaymentTransaction(models.Model):
         data = response.get('data') if isinstance(response, dict) and response.get('ok') else None
         if self.cp_quote and isinstance(data, dict) and self.state not in ('done', 'error', 'cancel', 'authorized'):
             evidence = {'approved': data.get('respstat') == 'A',
-                        'identity_matches': str(data.get('merchid')) == self.cp_merchant_id and
-                                            data.get('orderid') == self.cp_order_id}
+                        'identity_matches': self._cp_matches_gateway_transaction(data)}
             for key in ('amount', 'fee_amount'):
                 try:
                     evidence[key] = str(money(data.get(key)))

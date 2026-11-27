@@ -108,6 +108,21 @@ class TestOnlineACH(TransactionCase):
         self.assertEqual(call.call_args.args[0],'GET')
 
     def test_wrong_identity_or_missing_reference_stays_unknown(self):
+        # An inquiry must never resolve an attempt with conflicting order IDs.
+        tx = self.tx()
+        with patch.object(type(self.provider), '_cp_online_request', return_value={}):
+            self.submit(tx)
+        response = self.answer(tx, 'C', orderId='another-order')
+        tx._cp_apply_response(response)
+        self.assertEqual(tx.state, 'pending')
+        del response['data']['orderid']
+        tx._cp_apply_response(response)
+        self.assertEqual(tx.state, 'pending')
+        del response['data']['orderId']
+        tx._cp_apply_response(response)
+        self.assertEqual(tx.state, 'pending')
+        tx._set_canceled('Test isolation')
+
         for change in [{'amount':'11.00'},{'orderid':'other'},{'merchid':'other'},{'retref':None},{'amount':None},{'respstat':'B'},{'currency':'EUR'}]:
             with self.subTest(change=change):
                 tx=self.tx()
@@ -115,6 +130,20 @@ class TestOnlineACH(TransactionCase):
                     self.submit(tx)
                     self.assertEqual(tx.state,'pending')
                 tx._set_canceled('Test isolation')
+
+    def test_echeck_decline_from_order_inquiry(self):
+        tx = self.tx()
+        with patch.object(type(self.provider), '_cp_online_request', return_value={}):
+            self.submit(tx)
+        response = {'ok': True, 'data': {
+            'orderId': tx.cp_order_id, 'merchid': tx.cp_merchant_id,
+            'retref': 'LAB-REFERENCE', 'respproc': 'PPS', 'respcode': '48',
+            'respstat': 'C', 'setlstat': 'Declined', 'amount': '10.00',
+        }}
+        with patch.object(type(self.provider), '_cp_online_request', return_value=response) as gateway:
+            self.assertEqual(tx._cp_process()['state'], 'error')
+            self.assertEqual(tx._cp_process()['state'], 'error')
+        gateway.assert_called_once_with('GET', f'inquireByOrderid/{tx.cp_order_id}/{tx.cp_merchant_id}')
 
     def test_consent_currency_and_capability_fail_closed(self):
         tx=self.tx()
