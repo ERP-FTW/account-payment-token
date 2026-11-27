@@ -39,6 +39,18 @@ class TestCardCheckout(TestInvoiceCheckout):
     def test_card_disabled_no_fee(self):
         super().test_disabled_checkout_remains_principal_without_fee()
 
+    def test_program_card_excludes_configured_manual_fee(self):
+        self.provider.cardpointe_merchant_config_id.surcharge_program = True
+        self.assertTrue(self.provider.cp_surcharge_program)
+        self.assertTrue(self.provider.markup_enabled)
+        self.provider._cp_check_surcharge_configuration()
+        self.assertEqual(self.provider._cp_checkout_amount(100, self.currency, self.partner, 'card'), 100)
+        tx = self._transaction()
+        values = tx._get_processing_values()
+        self.assertEqual(values['amount'], 100)
+        self.assertEqual(values['markup_amount'], 0)
+        self.assertFalse(tx.markup_fee_move_id)
+
     def test_card_checkout_amount_and_document_ceiling(self):
         tx = self._transaction()
         self.assertFalse(self.provider.cp_surcharge_program)

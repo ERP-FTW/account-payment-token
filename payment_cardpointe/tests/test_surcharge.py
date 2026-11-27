@@ -6,6 +6,7 @@ from unittest.mock import patch
 from odoo import fields
 from odoo.tests import TransactionCase, tagged
 from odoo.exceptions import ValidationError
+from odoo.addons.payment_cardpointe.models.payment_provider import PaymentProvider
 from odoo.addons.payment_cardpointe_base.services.surcharge import quote_fee, agreement, UnusableSurcharge
 from odoo.addons.payment_cardpointe_base.models import cardpointe_client
 
@@ -258,10 +259,16 @@ class TestSurcharge(TransactionCase):
             self.assertEqual(tx.cp_receipt['total'], '100.00')
 
     def test_manual_program_guard_and_card_only(self):
-        with patch.object(type(self.p),'_fields',dict(self.p._fields, markup_enabled=self.p._fields['cp_surcharge_program'])):
-            # Stub only the optional module's field value, not the guard.
-            original=type(self.p).__getitem__
-            with patch.object(type(self.p),'__getitem__',lambda record,key: True if key=='markup_enabled' else original(record,key)):
-                with self.assertRaises(ValidationError): self.p._cp_check_surcharge_configuration()
+        # Exercise the default policy for a fee engine without a CardPointe integration.
+        # The optional markup companion tests its own policy with a real provider.
+        provider_type = type(self.p)
+        getitem = provider_type.__getitem__
+        with (
+            patch.object(provider_type, '_cp_manual_markup_conflict', PaymentProvider._cp_manual_markup_conflict),
+            patch.object(provider_type, '_fields', dict(self.p._fields, markup_enabled=self.p._fields['cp_surcharge_program'])),
+            patch.object(provider_type, '__getitem__', lambda record, key: True if key == 'markup_enabled' else getitem(record, key)),
+            self.assertRaises(ValidationError),
+        ):
+            self.p._cp_check_surcharge_configuration()
         for fee in ['-1','NaN',None,True]:
             with self.assertRaises(UnusableSurcharge): agreement({'amount':'100.00','fee_amount':fee,'fee_type':'SURCHRG'},'100.00')
