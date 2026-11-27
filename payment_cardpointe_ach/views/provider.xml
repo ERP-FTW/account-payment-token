@@ -1,0 +1,24 @@
+<odoo>
+ <record id="provider_ach_form" model="ir.ui.view">
+  <field name="name">payment.provider.ach.form</field><field name="model">payment.provider</field>
+  <field name="inherit_id" ref="payment.payment_provider_form"/>
+  <field name="arch" type="xml">
+   <xpath expr="//notebook" position="inside">
+    <page string="One-time ACH" invisible="code != 'cardpointe'" groups="base.group_system">
+     <p>Add Bank account (ACH) to Payment Methods to offer it. Remove Card for ACH only. Enable only combinations proven for the assigned merchant. No credentials or account data in evidence references.</p>
+     <group><field name="cp_ach_agreement_ref"/>
+      <field name="cp_ach_consumer_checking"/><field name="cp_ach_consumer_savings"/>
+      <field name="cp_ach_business_checking"/><field name="cp_ach_business_savings"/>
+     </group>
+    </page>
+   </xpath>
+  </field>
+ </record>
+ <record id="partner_ach_agreement_form" model="ir.ui.view">
+  <field name="name">res.partner.ach.agreement</field><field name="model">res.partner</field>
+  <field name="inherit_id" ref="base.view_partner_form"/>
+  <field name="arch" type="xml">
+   <xpath expr="//notebook" position="inside"><page string="ACH Agreement" groups="base.group_system"><group><field name="cp_ach_ccd_agreement_ref"/></group></page></xpath>
+  </field>
+ </record>
+</odoo>

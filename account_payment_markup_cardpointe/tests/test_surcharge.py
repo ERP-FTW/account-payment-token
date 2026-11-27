@@ -6,8 +6,7 @@ from unittest.mock import patch
 from odoo import fields
 from odoo.tests import TransactionCase, tagged
 from odoo.exceptions import ValidationError
-from odoo.addons.payment_cardpointe.models.payment_provider import PaymentProvider
-from odoo.addons.payment_cardpointe_base.services.surcharge import quote_fee, agreement, UnusableSurcharge
+from odoo.addons.account_payment_markup_cardpointe.services.surcharge import quote_fee, agreement, UnusableSurcharge
 from odoo.addons.payment_cardpointe_base.models import cardpointe_client
 
 
@@ -17,8 +16,11 @@ class TestSurcharge(TransactionCase):
         super().setUp()
         self.p = self.env.ref('payment_cardpointe.payment_provider_cardpointe')
         self.card = self.env.ref('payment.payment_method_card')
-        self.cfg = self.env['cardpointe.merchant.config'].create({'name':'Synthetic program fixture', 'mid':'LAB-NONROUTABLE', 'surcharge_program':True})
+        self.cfg = self.env['cardpointe.merchant.config'].create({'name':'Synthetic program fixture', 'mid':'LAB-NONROUTABLE'})
         self.p.write({'state':'test','is_published':True,'cardpointe_merchant_config_id':self.cfg.id,'payment_method_ids':[(6,0,self.card.ids)]})
+        self.fee = self.env['payment.method.fee'].create({
+            'provider_id': self.p.id, 'method_id': self.card.id, 'use_cardpointe_program': True,
+        })
         self.partner = self.env['res.partner'].create({'name':'Synthetic surcharge payer', 'country_id':self.env.ref('base.us').id})
         self.token = secrets.token_hex(16)
         ctx = patch('odoo.addons.payment.utils.request', new=SimpleNamespace(env=self.env))
@@ -231,44 +233,7 @@ class TestSurcharge(TransactionCase):
             result=self.p._cp_online_request('GET','surcharge',{'token':secret})
         self.assertNotIn(secret,str(result)); self.assertNotIn(secret,str(log.mock_calls))
 
-    def test_manual_conflict_override_keeps_legacy_fees_guard(self):
-        with patch.object(type(self.p), '_cp_manual_markup_conflict', return_value=False):
-            self.p._cp_check_surcharge_configuration()
-            with patch.object(type(self.p), '_fields', dict(
-                    self.p._fields, fees_active=self.p._fields['cp_surcharge_program'])):
-                original = type(self.p).__getitem__
-                with patch.object(type(self.p), '__getitem__',
-                                  lambda record, key: True if key == 'fees_active' else original(record, key)):
-                    with self.assertRaises(ValidationError):
-                        self.p._cp_check_surcharge_configuration()
-            # Admitting a fee integration never invents a local card surcharge:
-            # unusable quotes refuse; explicit zero remains zero; auth uses principal.
-            tx = self.tx()
-            with patch.object(type(self.p), '_cp_online_request', return_value={}) as call:
-                self.assertEqual(tx._cp_process(self.token, postal='19000')['state'], 'quote_error')
-            self.assertEqual(call.call_count, 1)
-            self.assertFalse(tx.cp_order_id)
-            qid = self.quote(tx, {'token': 'DEBIT', 'postal': 'NOT_RESTRICTED'})
-            with patch.object(type(self.p), '_cp_online_request',
-                              side_effect=lambda *a, **k: self.reply(tx, '0.00', '100.00', 'SURCHRG_WAIVED')) as call:
-                tx._cp_process(self.token, postal='19000', quote_id=qid)
-            self.assertEqual(call.call_count, 1)
-            self.assertEqual(call.call_args.args[2]['amount'], '100.00')
-            self.assertNotIn('fee_amount', call.call_args.args[2])
-            self.assertEqual(tx.cp_receipt['fee'], '0.00')
-            self.assertEqual(tx.cp_receipt['total'], '100.00')
 
-    def test_manual_program_guard_and_card_only(self):
-        # Exercise the default policy for a fee engine without a CardPointe integration.
-        # The optional markup companion tests its own policy with a real provider.
-        provider_type = type(self.p)
-        getitem = provider_type.__getitem__
-        with (
-            patch.object(provider_type, '_cp_manual_markup_conflict', PaymentProvider._cp_manual_markup_conflict),
-            patch.object(provider_type, '_fields', dict(self.p._fields, markup_enabled=self.p._fields['cp_surcharge_program'])),
-            patch.object(provider_type, '__getitem__', lambda record, key: True if key == 'markup_enabled' else getitem(record, key)),
-            self.assertRaises(ValidationError),
-        ):
-            self.p._cp_check_surcharge_configuration()
+    def test_malformed_gateway_amounts(self):
         for fee in ['-1','NaN',None,True]:
             with self.assertRaises(UnusableSurcharge): agreement({'amount':'100.00','fee_amount':fee,'fee_type':'SURCHRG'},'100.00')

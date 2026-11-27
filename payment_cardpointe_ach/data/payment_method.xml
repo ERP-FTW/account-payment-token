@@ -1,0 +1,7 @@
+<odoo noupdate="1">
+  <record id="payment_method_ach" model="payment.method">
+    <field name="name">Bank account (ACH)</field><field name="code">cardpointe_ach</field>
+    <field name="sequence">25</field><field name="active" eval="True"/>
+    <field name="supported_currency_ids" eval="[(6,0,[ref('base.USD')])]"/>
+  </record>
+</odoo>

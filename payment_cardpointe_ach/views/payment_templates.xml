@@ -1,0 +1,19 @@
+<odoo>
+ <template id="ach_inline" inherit_id="payment_cardpointe.inline_form">
+  <xpath expr="//p[hasclass('o_cp_notice')]" position="after">
+   <t t-if="pm_sudo.code == 'cardpointe_ach'">
+   <t t-set="cp_consent_amount" t-value="amount"/>
+   <div class="o_cp_ach" t-att-data-consent-amount="'%.2f' % cp_consent_amount">
+    <p>Choose your account class. Enter routing/account details only inside the secure form above.</p>
+    <label t-foreach="provider_sudo._cp_ach_options()" t-as="option" class="d-block">
+     <input type="radio" t-att-name="'cp_account_class_%s' % provider_sudo.id" class="o_cp_account_class" t-att-value="option[0]"/>
+     <span t-out="option[1]"/>
+    </label>
+    <label class="d-block mt-2"><input type="checkbox" class="o_cp_consent"/>
+     <span t-out="provider_sudo._cp_ach_consent(cp_consent_amount, currency)"/>
+    </label>
+   </div>
+   </t>
+  </xpath>
+ </template>
+</odoo>

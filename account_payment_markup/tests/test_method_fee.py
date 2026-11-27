@@ -45,7 +45,6 @@ class TestInboundMethodFee(TransactionCase):
                     wizard = self.env['account.payment.register'].with_context(
                         active_model='account.move', active_ids=invoices.ids,
                     ).create({'journal_id': bank.id, 'payment_method_line_id': method.id, 'group_payment': True})
-                    self.assertFalse(wizard.markup_provider_id)
                     self.assertEqual(wizard.markup_gross_amount, expected)
                     payment = wizard._create_payments()
                     self.assertEqual(len(payment), 1)

@@ -1,7 +1,7 @@
 """Validate processor-owned fees; never calculate a surcharge from a rate.
 
 Online eligibility and terminal authorization are different protocols. See
-payment_cardpointe/docs/surcharge-program.md for the authoritative field map.
+docs/surcharge-program.md for the authoritative field map.
 """
 import re
 from decimal import Decimal

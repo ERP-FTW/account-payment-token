@@ -1,0 +1,21 @@
+<odoo>
+    <record id="online_method_fees" model="ir.ui.view">
+        <field name="name">payment.method.fees</field>
+        <field name="model">payment.method</field>
+        <field name="inherit_id" ref="payment.payment_method_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Payment fees" name="payment_fees">
+                    <field name="markup_fee_ids">
+                        <list editable="bottom">
+                            <field name="provider_id" domain="[('payment_method_ids', 'in', [parent.id])]"/>
+                            <field name="markup_percent"/>
+                            <field name="markup_product_id" optional="hide"/>
+                            <field name="markup_tax_included" optional="hide"/>
+                        </list>
+                    </field>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

@@ -2,7 +2,7 @@ import unittest
 
 from odoo.tests.common import TransactionCase
 
-from ..services.calculation import UNSET, calculate_markup, calculate_taxed_markup
+from ..services.calculation import calculate_markup, calculate_taxed_markup
 
 
 class _Tax:
@@ -67,20 +67,8 @@ class TestMarkupCalculation(TransactionCase):
     def test_disabled_and_unknown_are_unchanged(self):
         self.assertEqual(calculate_markup(100, 2.5, self.round, eligible=False)['amount'], 0.0)
 
-    def test_explicit_processor_zero_replaces_local(self):
-        result = calculate_markup(100, 2.5, self.round, eligible=True, processor_amount=0.0)
-        self.assertEqual(result['amount'], 0.0)
-        self.assertEqual(result['source'], 'processor')
 
-    def test_absent_processor_amount_is_not_zero(self):
-        result = calculate_markup(100, 2.5, self.round, eligible=True, processor_amount=UNSET)
-        self.assertEqual(result['amount'], 2.5)
 
-    def test_untrusted_processor_amount_cannot_enable_markup(self):
-        result = calculate_markup(100, 2.5, self.round, eligible=False, processor_amount=12.0)
-        self.assertEqual(result['amount'], 0.0)
-        self.assertEqual(result['total'], 100.0)
-        self.assertEqual(result['source'], 'none')
 
     def test_included_rate_uses_attainable_native_gross_after_rounding(self):
         result = calculate_taxed_markup(

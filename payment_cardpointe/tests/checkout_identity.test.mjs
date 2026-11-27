@@ -13,14 +13,15 @@ vm.runInNewContext(source, {
     rpc: async (route, params) => {
         calls.push({ route, params });
         if (route === '/synthetic/transaction') return {reference: `TX${calls.length}`, access_token: 'synthetic-access'};
-        return { state: 'quote_error', message: 'Synthetic transport only' };
+        return { state: 'pending' };
     },
-    _t: text => text, URL, Map,
+    _t: text => text, URL, Map, window: {},
     sessionStorage: {getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value)},
 });
 const iframe = {};
 const form = {querySelector: selector => selector === 'iframe' ? iframe : null};
 const ctx = {
+    __proto__: PaymentForm.prototype,
     el: {querySelector: () => ({})},
     paymentContext: {transactionRoute: '/synthetic/transaction', partnerId: 1, amount: 10, currencyId: 1, providerId: 7},
     _getInlineForm: () => ({querySelector: () => form}),
@@ -28,15 +29,17 @@ const ctx = {
     _cpTokens: new Map([[iframe, 'SYNTHETICNOTROUTABLE']]),
     _enableButton() {}, _displayErrorDialog() {throw new Error('Unexpected payment failure');},
 };
-const submit = () => PaymentForm.prototype._initiatePaymentFlow.call(ctx, 'cardpointe', 39, 'card', 'direct');
+const submit = () => ctx._initiatePaymentFlow('cardpointe', 39, 'card', 'direct');
 await submit();
 assert.equal(calls.length, 2);
 assert.equal(calls[1].params.provider_id, 7);
 const originalReference = calls[1].params.reference;
+ctx._cpTokens.set(iframe, 'SYNTHETICNOTROUTABLE');
 await submit();
 assert.equal(calls.length, 3);
 assert.equal(calls[2].params.reference, originalReference);
 ctx.paymentContext.providerId = 8;
+ctx._cpTokens.set(iframe, 'SYNTHETICNOTROUTABLE');
 await submit();
 assert.equal(calls.length, 5, 'changing provider must create its own transaction');
 assert.equal(calls[3].route, '/synthetic/transaction');

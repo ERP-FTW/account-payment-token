@@ -6,10 +6,6 @@ from ..services.calculation import calculate_markup, calculate_taxed_markup
 class AccountPaymentRegister(models.TransientModel):
     _inherit = 'account.payment.register'
 
-    markup_provider_id = fields.Many2one(
-        'payment.provider', string='Markup provider',
-        domain="[('company_id', '=', company_id), ('markup_enabled', '=', True)]",
-    )
     markup_amount = fields.Monetary(
         string='Payment markup', currency_field='currency_id',
         compute='_compute_markup_disclosure', readonly=True,
@@ -31,7 +27,7 @@ class AccountPaymentRegister(models.TransientModel):
         compute='_compute_markup_disclosure', readonly=True,
     )
 
-    @api.depends('amount', 'markup_provider_id', 'currency_id', 'payment_method_line_id')
+    @api.depends('amount', 'currency_id', 'payment_method_line_id')
     def _compute_markup_disclosure(self):
         for wizard in self:
             provider = wizard._markup_configuration()
@@ -52,7 +48,7 @@ class AccountPaymentRegister(models.TransientModel):
     def _markup_configuration(self):
         self.ensure_one()
         method = self.payment_method_line_id
-        return method if method and method.markup_mode != 'disabled' else self.markup_provider_id
+        return method
 
     def _markup_payment_values(self, amount=None):
         """Return the server-computed disclosure consumed by payment adapters.
@@ -71,7 +67,7 @@ class AccountPaymentRegister(models.TransientModel):
         )
         product = provider.markup_product_id if eligible else False
         net_amount = details['amount']
-        if eligible and provider._name == 'account.payment.method.line' and provider.markup_mode == 'fixed':
+        if eligible and provider.markup_mode == 'fixed':
             net_amount = self.currency_id.round(provider.markup_fixed_amount) if amount > 0 else 0.0
         gross_amount = net_amount
         tax_amount = 0.0
@@ -92,18 +88,12 @@ class AccountPaymentRegister(models.TransientModel):
             'tax_amount': tax_amount,
             'total': self.currency_id.round(amount + gross_amount),
             'amount': net_amount,
-            'provider_id': self.markup_provider_id.id if provider._name == 'payment.provider' else False,
         }
 
     def _markup_payment_eligible(self, provider=None):
         self.ensure_one()
         provider = provider or self._markup_configuration()
-        # A register-payment wizard has no verified processor instrument.
-        # Keep explicit inbound method fees independent of gateway policy, but
-        # never turn a program-enabled provider into a local manual fallback.
-        provider_eligible = bool(provider) and (
-            provider._name != 'payment.provider' or provider._markup_card_eligible())
-        return bool(provider and provider_eligible and provider._markup_is_configured()
+        return bool(provider and provider._markup_is_configured()
                     and provider.company_id == self.company_id
                     and self.payment_type == 'inbound'
                     and self.journal_id)
@@ -214,14 +204,11 @@ class AccountPaymentRegister(models.TransientModel):
 
     def _create_payment_vals_from_wizard(self, batch_result):
         vals = super()._create_payment_vals_from_wizard(batch_result)
-        if self.markup_provider_id and not self._markup_payment_eligible():
-            return vals
         details = self._markup_payment_values(vals['amount'])
         if not details['markup_amount']:
             return vals
         vals['amount'] = details['total']
         vals.update({
-            'markup_provider_id': self.markup_provider_id.id,
             'markup_rate_applied': self._markup_configuration().markup_percent,
             'markup_tax_included': self._markup_configuration().markup_tax_included,
             'markup_amount_source': 'manual',
@@ -240,15 +227,12 @@ class AccountPaymentRegister(models.TransientModel):
 
     def _create_payment_vals_from_batch(self, batch_result):
         vals = super()._create_payment_vals_from_batch(batch_result)
-        if self.markup_provider_id and not self._markup_payment_eligible():
-            return vals
         details = self._markup_payment_values(vals['amount'])
         if not details['markup_amount']:
             return vals
         vals['amount'] = self.currency_id.round(
             vals['amount'] + details['gross_amount'])
         vals.update({
-            'markup_provider_id': self.markup_provider_id.id,
             'markup_rate_applied': self._markup_configuration().markup_percent,
             'markup_tax_included': self._markup_configuration().markup_tax_included,
             'markup_amount_source': 'manual',

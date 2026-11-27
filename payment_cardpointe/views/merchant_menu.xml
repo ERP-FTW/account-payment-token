@@ -1,0 +1,8 @@
+<odoo>
+    <menuitem id="menu_cardpointe_merchant_config"
+              name="CardPointe Merchant Configs"
+              parent="account.root_payment_menu"
+              action="payment_cardpointe_base.action_cardpointe_merchant_config"
+              sequence="20"
+              groups="base.group_system"/>
+</odoo>

@@ -1,6 +1,3 @@
-UNSET = object()
-
-
 def _rounded(currency_round, value):
     """Keep Odoo's float_round contract: never pass Decimal to it."""
     return currency_round(float(value or 0.0))
@@ -61,22 +58,9 @@ def calculate_taxed_markup(fee_amount, taxes, currency, product=None, partner=No
     }
 
 
-def calculate_markup(base_amount, percent, currency_round, eligible=False, processor_amount=UNSET):
-    """Return one immutable fee decision.
-
-    ``processor_amount`` deliberately uses UNSET so an authoritative zero is
-    different from a missing processor response.
-    """
+def calculate_markup(base_amount, percent, currency_round, eligible=False):
+    """Calculate the manual percentage using the payment currency rounding."""
     base = _rounded(currency_round, base_amount)
-    # A processor amount is authoritative only after the server has proven
-    # eligibility.  Never let public checkout metadata turn an otherwise
-    # disabled/unknown instrument into a fee-bearing payment.
-    if eligible and processor_amount is not UNSET:
-        amount = _rounded(currency_round, processor_amount)
-        return {
-            'base_amount': base, 'rate': 0.0, 'amount': amount,
-            'total': _rounded(currency_round, base + amount), 'source': 'processor',
-        }
     if not eligible:
         return {'base_amount': base, 'rate': 0.0, 'amount': 0.0, 'total': base, 'source': 'none'}
     rate = float(percent or 0.0)

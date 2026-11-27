@@ -1,0 +1,17 @@
+<odoo>
+    <record id="online_card_program" model="ir.ui.view">
+        <field name="name">payment.method.cardpointe.program</field>
+        <field name="model">payment.method</field>
+        <field name="inherit_id" ref="account_payment_markup.online_method_fees"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='markup_percent']" position="before">
+                <field name="provider_code" column_invisible="True"/>
+                <field name="method_code" column_invisible="True"/>
+                <field name="use_cardpointe_program" invisible="provider_code != 'cardpointe' or method_code != 'card'"/>
+            </xpath>
+            <field name="markup_percent" position="attributes">
+                <attribute name="readonly">use_cardpointe_program</attribute>
+            </field>
+        </field>
+    </record>
+</odoo>

@@ -1,65 +1,6 @@
-import ast
-import pathlib
-
 from odoo import fields
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
-
-from ..services.calculation import calculate_markup
-
-
-ROOT = pathlib.Path(__file__).parents[1]
-
-
-class MarkupContractTest(TransactionCase):
-    def test_disabled_and_manual_provider_decisions(self):
-        r = lambda value: round(float(value), 2)
-        self.assertEqual(calculate_markup(100, 3, r, eligible=False)['total'], 100.0)
-        self.assertEqual(calculate_markup(100, 3, r, eligible=True)['total'], 103.0)
-
-    def test_authoritative_zero_processor_amount(self):
-        r = lambda value: round(float(value), 2)
-        result = calculate_markup(100, 3, r, eligible=True, processor_amount=0.0)
-        self.assertEqual(result['source'], 'processor')
-        self.assertEqual(result['amount'], 0.0)
-
-    def test_manual_and_processor_evidence_contracts_exist(self):
-        source = (ROOT / 'models' / 'payment_provider.py').read_text()
-        self.assertIn('Accept configured manual fees or verified processor evidence', source)
-        self.assertIn('server_trusted_markup_evidence', source)
-        self.assertIn("return False", source)
-
-    def test_processing_values_use_disclosed_server_amount(self):
-        tree = ast.parse((ROOT / 'models' / 'payment_transaction.py').read_text())
-        names = {node.name for node in tree.body if isinstance(node, ast.ClassDef)
-                 for node in node.body if isinstance(node, ast.FunctionDef)}
-        self.assertIn('_get_processing_values', names)
-        source = (ROOT / 'models' / 'payment_transaction.py').read_text()
-        self.assertIn("'amount': details['total']", source)
-
-    def test_original_evidence_refund_cap_is_integrated(self):
-        source = (ROOT / 'models' / 'payment_transaction.py').read_text()
-        self.assertIn('def _create_child_transaction', source)
-        self.assertGreaterEqual(source.count('_markup_refund_cap('), 3)
-
-    def test_refund_tax_base_uses_company_currency_precision(self):
-        source = (ROOT / 'models' / 'account_payment.py').read_text()
-        self.assertIn('target_base = company_currency.round(original_base * ratio)', source)
-        self.assertIn('line_base = company_currency.round((target_base - prior_base) if sign < 0 else max(target_base - prior_base, 0.0))', source)
-
-    def test_retry_rejects_changed_accounting_configuration(self):
-        source = (ROOT / 'models' / 'payment_transaction.py').read_text()
-        self.assertIn('markup_accounting_fingerprint', source)
-        self.assertIn('payment must be restarted', source)
-
-    def test_portal_disclosure_is_server_computed_and_manifest_loaded(self):
-        manifest = ast.literal_eval((ROOT / '__manifest__.py').read_text())
-        self.assertIn('views/payment_portal_templates.xml', manifest['data'])
-        provider = (ROOT / 'models' / 'payment_provider.py').read_text()
-        template = (ROOT / 'views' / 'payment_portal_templates.xml').read_text()
-        self.assertIn('def _markup_portal_disclosure', provider)
-        self.assertIn('data-markup-disclosure="server"', template)
-
 
 class MarkupRuntimeTest(TransactionCase):
     """Small installed-module regressions; these must run in Odoo's test loader."""
@@ -74,23 +15,7 @@ class MarkupRuntimeTest(TransactionCase):
             'company_id': cls.env.company.id,
         })
 
-    def test_accounting_retry_guard_field_is_installed(self):
-        tx_model = self.env['payment.transaction']
-        self.assertIn('markup_accounting_fingerprint', tx_model._fields)
-        self.assertIn('markup_net_amount', tx_model._fields)
 
-    def test_manual_eligibility_does_not_require_endpoint_evidence(self):
-        provider = self.env['payment.provider'].search([], limit=1)
-        self.assertTrue(provider._markup_card_eligible())
-        self.assertFalse(provider._markup_card_eligible(
-            card_type='credit', evidence_verified=True,
-            processor_surcharge_present=False, evidence_trusted=True,
-        ))
-        trusted = provider.with_context(server_trusted_markup_evidence=True)
-        self.assertTrue(trusted._markup_card_eligible(
-            card_type='credit', evidence_verified=True,
-            processor_surcharge_present=False, evidence_trusted=True,
-        ))
 
     def test_portal_disclosure_view_is_installed(self):
         view = self.env.ref(
@@ -124,6 +49,9 @@ class MarkupRuntimeTest(TransactionCase):
             'property_account_income_id': account.id, 'taxes_id': [(6, 0, tax.ids)],
         })
         provider = self.env['payment.provider'].search([('name', '=', 'Wire Transfer')], limit=1)
+        setting = self.env['payment.method.fee'].create({
+            'provider_id': provider.id, 'method_id': self.env.ref('payment.payment_method_unknown').id,
+        })
         tx = self.env['payment.transaction'].create({
             'provider_id': provider.id, 'payment_method_id': self.env.ref('payment.payment_method_unknown').id, 'reference': 'MKT-MATRIX',
             'amount': 100, 'currency_id': company.currency_id.id,
@@ -132,18 +60,18 @@ class MarkupRuntimeTest(TransactionCase):
         for product_included, rate_included in ((False, False), (False, True),
                                                 (True, False), (True, True)):
             tax.price_include = product_included
-            provider.write({
-                'markup_enabled': True, 'markup_percent': 3,
+            setting.write({
+                'markup_percent': 3,
                 'markup_product_id': product.id, 'markup_tax_included': rate_included,
             })
-            disclosure = provider._markup_portal_disclosure(
+            disclosure = setting._markup_details(
                 100.0, company.currency_id, self.env.user.partner_id,
             )
-            details = tx._markup_details(base_amount=100)
+            details = tx._markup_fee()._markup_details(100, tx.currency_id, tx.partner_id)
             self.assertEqual(disclosure['net_amount'], details['net_amount'])
             self.assertEqual(disclosure['tax_amount'], details['tax_amount'])
             self.assertEqual(disclosure['gross_amount'], details['gross_amount'])
-            self.assertEqual(disclosure['total_amount'], details['total'])
+            self.assertEqual(disclosure['total'], details['total'])
             if rate_included:
                 expected = (2.73, 0.27, 3.0)
             else:
@@ -173,8 +101,11 @@ class MarkupRuntimeTest(TransactionCase):
             'property_account_income_id': account.id,
         })
         provider = self.env['payment.provider'].search([('name', '=', 'Wire Transfer')], limit=1)
-        provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
+        setting = self.env['payment.method.fee'].create({
+            'provider_id': provider.id, 'method_id': self.env.ref('payment.payment_method_unknown').id,
+        })
+        setting.write({
+            'markup_percent': 3,
             'markup_product_id': product.id,
         })
         sale_journal = self.env['account.journal'].create({
@@ -213,7 +144,7 @@ class MarkupRuntimeTest(TransactionCase):
                         product.taxes_id = [(6, 0, tax.ids)]
                     else:
                         product.taxes_id = [(6, 0, (included | excluded).ids)]
-                    provider.markup_tax_included = rate_included
+                    setting.markup_tax_included = rate_included
                     tx = self.env['payment.transaction'].create({
                         'provider_id': provider.id, 'payment_method_id': self.env.ref('payment.payment_method_unknown').id,
                         'reference': 'MIX-%s-%s-%s-%s' % (
@@ -256,8 +187,11 @@ class MarkupRuntimeTest(TransactionCase):
             'property_account_income_id': account.id,
         })
         provider = self.env['payment.provider'].search([('name', '=', 'Wire Transfer')], limit=1)
-        provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
+        setting = self.env['payment.method.fee'].create({
+            'provider_id': provider.id, 'method_id': self.env.ref('payment.payment_method_unknown').id,
+        })
+        setting.write({
+            'markup_percent': 3,
             'markup_product_id': product.id,
         })
         sale_journal = self.env['account.journal'].create({
@@ -289,7 +223,7 @@ class MarkupRuntimeTest(TransactionCase):
                 results = []
                 for label, tax_ids in (('flat', leaves), ('group', group)):
                     product.taxes_id = [(6, 0, tax_ids.ids)]
-                    provider.markup_tax_included = rate_included
+                    setting.markup_tax_included = rate_included
                     tx = self.env['payment.transaction'].create({
                         'provider_id': provider.id, 'payment_method_id': self.env.ref('payment.payment_method_unknown').id,
                         'reference': 'MKT-ALL-%s-%s-%s' % (base, rate_included, label),
@@ -298,12 +232,12 @@ class MarkupRuntimeTest(TransactionCase):
                         'invoice_ids': [(6, 0, invoice.ids)],
                     })
                     details = tx._markup_prepare(base_amount=base)
-                    disclosure = provider._markup_portal_disclosure(
+                    disclosure = setting._markup_details(
                         base, company.currency_id, partner,
                     )
                     self.assertEqual(
                         (disclosure['net_amount'], disclosure['tax_amount'],
-                         disclosure['gross_amount'], disclosure['total_amount']),
+                         disclosure['gross_amount'], disclosure['total']),
                         (details['net_amount'], details['tax_amount'],
                          details['gross_amount'], details['total']),
                     )
@@ -320,75 +254,6 @@ class MarkupRuntimeTest(TransactionCase):
                                     details['gross_amount'], details['total']))
                 self.assertEqual(results[0], results[1])
 
-    def test_recursive_group_tax_fingerprint_changes_with_child_semantics(self):
-        company = self.env.company
-        company.country_id = self.env.ref('base.us')
-        child = self.env['account.tax'].create({
-            'name': 'Markup child tax', 'amount': 10, 'amount_type': 'percent',
-            'type_tax_use': 'sale', 'company_id': company.id,
-            'country_id': company.country_id.id,
-        })
-        group = self.env['account.tax'].create({
-            'name': 'Markup group tax', 'amount': 0, 'amount_type': 'group',
-            'type_tax_use': 'sale', 'company_id': company.id,
-            'country_id': company.country_id.id, 'children_tax_ids': [(6, 0, child.ids)],
-        })
-        account = self.env['account.account'].create({
-            'name': 'Markup group income', 'code': 'MKTGROUP',
-            'account_type': 'income', 'company_ids': [(6, 0, [company.id])],
-        })
-        product = self.env['product.product'].create({
-            'name': 'Markup group fee', 'type': 'service',
-            'property_account_income_id': account.id, 'taxes_id': [(6, 0, group.ids)],
-        })
-        provider = self.env['payment.provider'].search([('name', '=', 'Wire Transfer')], limit=1)
-        provider.write({'markup_enabled': True, 'markup_percent': 3, 'markup_product_id': product.id})
-        tx = self.env['payment.transaction'].create({
-            'provider_id': provider.id, 'payment_method_id': self.env.ref('payment.payment_method_unknown').id, 'reference': 'MKT-GROUP', 'amount': 100,
-            'currency_id': company.currency_id.id, 'partner_id': self.env.user.partner_id.id,
-            'operation': 'online_redirect',
-        })
-        original = tx._markup_current_accounting_fingerprint()
-        child.amount = 20
-        changed = tx._markup_current_accounting_fingerprint()
-        self.assertNotEqual(original, changed)
-        child.amount = 10
-        self.assertEqual(original, tx._markup_current_accounting_fingerprint())
-
-    def test_retry_rejects_changed_tax_computation_type_runtime(self):
-        company = self.env.company
-        company.country_id = self.env.ref('base.us')
-        tax = self.env['account.tax'].create({
-            'name': 'Retry test tax', 'amount': 10, 'amount_type': 'percent',
-            'type_tax_use': 'sale', 'company_id': company.id,
-            'country_id': company.country_id.id,
-        })
-        account = self.env['account.account'].create({
-            'name': 'Retry test income', 'code': 'MKTRETRY',
-            'account_type': 'income', 'company_ids': [(6, 0, [company.id])],
-        })
-        product = self.env['product.product'].create({
-            'name': 'Retry test fee', 'type': 'service',
-            'property_account_income_id': account.id, 'taxes_id': [(6, 0, tax.ids)],
-        })
-        provider = self.env['payment.provider'].search([('name', '=', 'Wire Transfer')], limit=1)
-        provider.write({
-            'markup_enabled': True, 'markup_percent': 3,
-            'markup_product_id': product.id,
-        })
-        tx = self.env['payment.transaction'].create({
-            'provider_id': provider.id, 'payment_method_id': self.env.ref('payment.payment_method_unknown').id, 'reference': 'MKT-RETRY-TEST',
-            'amount': 100, 'currency_id': company.currency_id.id,
-            'partner_id': self.env.user.partner_id.id,
-            'operation': 'online_redirect',
-        })
-        tx._markup_prepare(base_amount=100)
-        tx.markup_amount_source = 'local'
-        tax.amount_type = 'fixed'
-        self.env.flush_all()
-        self.env.invalidate_all()
-        with self.assertRaises(ValidationError):
-            tx._markup_prepare(base_amount=100)
     def test_register_payment_posts_markup_tax_with_native_metadata_and_fallback(self):
         company = self.env.company
         company.country_id = self.env.ref('base.us')
@@ -409,9 +274,6 @@ class MarkupRuntimeTest(TransactionCase):
             'name': 'Register markup fee', 'type': 'service',
             'property_account_income_id': income.id,
         })
-        provider = self.env['payment.provider'].search(
-            [('name', '=', 'Wire Transfer')], limit=1,
-        )
         bank = self.env['account.journal'].create({
             'name': 'Register markup bank', 'code': 'RPB01',
             'type': 'bank', 'company_id': company.id,
@@ -430,9 +292,9 @@ class MarkupRuntimeTest(TransactionCase):
             'name': 'Register markup tax tag', 'applicability': 'taxes',
             'country_id': company.account_fiscal_country_id.id,
         })
-        provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
-            'markup_product_id': product.id, 'markup_tax_included': False,
+        bank.inbound_payment_method_line_ids[:1].write({
+            'markup_mode': 'percentage', 'markup_percent': 3, 'markup_product_id': product.id,
+            'markup_tax_included': False,
         })
         for assigned in (False, True):
             tax = self.env['account.tax'].create({
@@ -464,7 +326,7 @@ class MarkupRuntimeTest(TransactionCase):
             ).create({
                 'journal_id': bank.id,
                 'payment_method_line_id': method.id,
-                'markup_provider_id': provider.id,
+
             })
             self.assertAlmostEqual(wizard.markup_net_amount, 3.0, places=2)
             self.assertAlmostEqual(wizard.markup_tax_amount, 0.3, places=2)
@@ -472,7 +334,6 @@ class MarkupRuntimeTest(TransactionCase):
             self.assertAlmostEqual(wizard.markup_total_amount, 103.3, places=2)
             payment = wizard._create_payments()
             self.assertEqual(payment.markup_amount_source, 'manual')
-            self.assertEqual(payment.markup_provider_id, provider)
             self.assertAlmostEqual(payment.markup_base_amount, 100.0, places=2)
             self.assertAlmostEqual(payment.markup_net_amount, 3.0, places=2)
             self.assertAlmostEqual(payment.markup_tax_amount, 0.3, places=2)
@@ -482,7 +343,6 @@ class MarkupRuntimeTest(TransactionCase):
                 lambda line: line.markup_decision_source == 'manual'
             ))
             self.assertFalse(payment.move_id.markup_source_payment_id)
-            self.assertEqual(payment.move_id.markup_provider_id, provider)
             self.assertAlmostEqual(payment.move_id.markup_total_amount, 103.3, places=2)
             self.assertAlmostEqual(payment.amount, 103.30, places=2)
             self.assertAlmostEqual(invoice.amount_residual, 0.0, places=2)
@@ -517,7 +377,7 @@ class MarkupRuntimeTest(TransactionCase):
                 'property_account_income_id': replacement_income.id,
                 'taxes_id': [(6, 0, tax.ids)],
             })
-            provider.markup_product_id = replacement_product
+            method.markup_product_id = replacement_product
             # Match native Odoo16 tax-line metadata: the payment write-off
             # represents a sale-tax base, so the inverted entry reports the
             # positive taxable base in company currency.
@@ -540,11 +400,11 @@ class MarkupRuntimeTest(TransactionCase):
             self.assertAlmostEqual(payment.markup_refunded_amount, 3.3, places=2)
             with self.assertRaises(ValidationError):
                 payment.action_refund_markup(0.01)
-            provider.markup_product_id = product
+            method.markup_product_id = product
 
             # An included surcharge rate with a price-excluded product tax
             # must report the native fee-line base (2.73), not the gross fee.
-            provider.markup_tax_included = True
+            method.markup_tax_included = True
             included_invoice = invoice.copy()
             included_invoice.action_post()
             included_wizard = self.env['account.payment.register'].with_context(
@@ -552,7 +412,7 @@ class MarkupRuntimeTest(TransactionCase):
             ).create({
                 'journal_id': bank.id,
                 'payment_method_line_id': method.id,
-                'markup_provider_id': provider.id,
+
             })
             self.assertAlmostEqual(included_wizard.markup_net_amount, 2.73, places=2)
             self.assertAlmostEqual(included_wizard.markup_tax_amount, 0.27, places=2)
@@ -566,7 +426,7 @@ class MarkupRuntimeTest(TransactionCase):
             self.assertAlmostEqual(
                 included_tax_line.tax_base_amount, 2.73, places=2,
             )
-            provider.markup_tax_included = False
+            method.markup_tax_included = False
 
     def test_partial_refund_rounding_allocates_to_requested_gross(self):
         """Each posted refund must stay balanced, including cent-sized splits."""
@@ -593,18 +453,15 @@ class MarkupRuntimeTest(TransactionCase):
             'name': 'Partial refund fee', 'type': 'service',
             'property_account_income_id': income.id, 'taxes_id': [(6, 0, tax.ids)],
         })
-        provider = self.env['payment.provider'].search(
-            [('name', '=', 'Wire Transfer')], limit=1,
-        )
-        provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
-            'markup_product_id': product.id, 'markup_tax_included': False,
-        })
         bank = self.env['account.journal'].create({
             'name': 'Partial refund bank', 'code': 'MKTPRB',
             'type': 'bank', 'company_id': company.id,
         })
         method = bank.inbound_payment_method_line_ids[:1]
+        method.write({
+            'markup_mode': 'percentage', 'markup_percent': 3, 'markup_product_id': product.id,
+            'markup_tax_included': False,
+        })
         method.payment_account_id = self.env['account.account'].create({
             'name': 'Partial refund outstanding', 'code': 'MKTPRO',
             'account_type': 'asset_current', 'reconcile': True,
@@ -627,7 +484,7 @@ class MarkupRuntimeTest(TransactionCase):
             active_model='account.move', active_ids=invoice.ids,
         ).create({
             'journal_id': bank.id, 'payment_method_line_id': method.id,
-            'markup_provider_id': provider.id,
+
         })
         payment = wizard._create_payments()
         self.assertEqual(
@@ -706,18 +563,15 @@ class MarkupRuntimeTest(TransactionCase):
             'property_account_income_id': income.id,
             'taxes_id': [(6, 0, taxes.ids)],
         })
-        provider = self.env['payment.provider'].search(
-            [('name', '=', 'Wire Transfer')], limit=1,
-        )
-        provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
-            'markup_product_id': product.id, 'markup_tax_included': False,
-        })
         bank = self.env['account.journal'].create({
             'name': 'Unequal refund bank', 'code': 'MKTURB',
             'type': 'bank', 'company_id': company.id,
         })
         method = bank.inbound_payment_method_line_ids[:1]
+        method.write({
+            'markup_mode': 'percentage', 'markup_percent': 3, 'markup_product_id': product.id,
+            'markup_tax_included': False,
+        })
         method.payment_account_id = self.env['account.account'].create({
             'name': 'Unequal refund outstanding', 'code': 'MKTURO',
             'account_type': 'asset_current', 'reconcile': True,
@@ -740,7 +594,7 @@ class MarkupRuntimeTest(TransactionCase):
             active_model='account.move', active_ids=invoice.ids,
         ).create({
             'journal_id': bank.id, 'payment_method_line_id': method.id,
-            'markup_provider_id': provider.id,
+
         })
         payment = wizard._create_payments()
         self.assertEqual(
@@ -789,7 +643,7 @@ class MarkupRuntimeTest(TransactionCase):
             active_model='account.move', active_ids=invoice_two.ids,
         ).create({
             'journal_id': bank.id, 'payment_method_line_id': method.id,
-            'markup_provider_id': provider.id,
+
         })
         payment_two = wizard_two._create_payments()
         for amount in (0.01, 0.01, 4.18):
@@ -846,18 +700,15 @@ class MarkupRuntimeTest(TransactionCase):
             'property_account_income_id': income.id,
             'taxes_id': [(6, 0, taxes.ids)],
         })
-        provider = self.env['payment.provider'].search(
-            [('name', '=', 'Wire Transfer')], limit=1,
-        )
-        provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
-            'markup_product_id': product.id, 'markup_tax_included': False,
-        })
         bank = self.env['account.journal'].create({
             'name': 'FX refund bank', 'code': 'MZFXB',
             'type': 'bank', 'company_id': company.id,
         })
         method = bank.inbound_payment_method_line_ids[:1]
+        method.write({
+            'markup_mode': 'percentage', 'markup_percent': 3, 'markup_product_id': product.id,
+            'markup_tax_included': False,
+        })
         method.payment_account_id = self.env['account.account'].create({
             'name': 'FX refund outstanding', 'code': 'MZFXO',
             'account_type': 'asset_current', 'reconcile': True,
@@ -880,7 +731,7 @@ class MarkupRuntimeTest(TransactionCase):
             active_model='account.move', active_ids=invoice.ids,
         ).create({
             'journal_id': bank.id, 'payment_method_line_id': method.id,
-            'markup_provider_id': provider.id,
+
         })
         payment = wizard._create_payments()
         original = payment.move_id.line_ids.filtered(
@@ -941,7 +792,7 @@ class MarkupRuntimeTest(TransactionCase):
             active_model='account.move', active_ids=invoice_two.ids,
         ).create({
             'journal_id': bank.id, 'payment_method_line_id': method.id,
-            'markup_provider_id': provider.id,
+
         })
         payment_two = wizard_two._create_payments()
         original_two = payment_two.move_id.line_ids.filtered(

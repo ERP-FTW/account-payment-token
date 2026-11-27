@@ -2,6 +2,7 @@
 import { PaymentForm } from '@payment/interactions/payment_form';
 import { expect, getFixture, test } from '@odoo/hoot';
 import '@payment_cardpointe/js/payment_form';
+import '@account_payment_markup_cardpointe/js/program';
 import { rpc } from '@web/core/network/rpc';
 import { patchWithCleanup } from '@web/../tests/web_test_helpers';
 
@@ -12,7 +13,7 @@ for (const fee of ['3.00', '0.00']) {
         el.innerHTML=`<input name="o_payment_radio" checked="checked" type="radio"/><div class="o_cp_form"><iframe></iframe><div class="o_cp_program"><input class="o_cp_postal" value="19000"/><p class="o_cp_quote_text"></p><input class="o_cp_quote_confirm" type="checkbox"/></div></div>`;
         const frame=el.querySelector('iframe');
         const calls=[];
-        const ctx={el, paymentContext:{transactionRoute:'/synthetic/transaction',partnerId:1,amount:100,currencyId:1},
+        const ctx={__proto__: PaymentForm.prototype, el, paymentContext:{transactionRoute:'/synthetic/transaction',partnerId:1,amount:100,currencyId:1},
             _getInlineForm:()=>el, _prepareTransactionRouteParams:()=>({}),
             _cpTokens:new Map([[frame,'SYNTHETICNOTROUTABLE']]),
             _enableButton:()=>{}, _displayErrorDialog:()=>{}};

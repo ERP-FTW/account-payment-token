@@ -15,13 +15,16 @@ class TestCardCheckout(TestInvoiceCheckout):
         product = cls.env['product.product'].search([('name', '=', 'Manual checkout fee')], limit=1)
         cfg = cls.env['cardpointe.merchant.config'].create({
             'name': 'Synthetic card checkout', 'mid': 'LAB-NONROUTABLE',
-            'surcharge_program': False,
         })
         cls.provider.write({
-            'state': 'test', 'markup_enabled': True, 'markup_percent': 3,
-            'markup_product_id': product.id, 'markup_use_cardpointe_program': False,
+            'state': 'test',
             'cardpointe_merchant_config_id': cfg.id,
             'payment_method_ids': [(6, 0, cls.env.ref('payment.payment_method_card').ids)],
+        })
+
+        cls.fee = cls.env['payment.method.fee'].create({
+            'method_id': cls.method.id, 'provider_id': cls.provider.id, 'markup_percent': 3,
+            'markup_product_id': product.id,
         })
 
     def setUp(self):
@@ -40,11 +43,8 @@ class TestCardCheckout(TestInvoiceCheckout):
         super().test_disabled_checkout_remains_principal_without_fee()
 
     def test_program_card_excludes_configured_manual_fee(self):
-        self.provider.cardpointe_merchant_config_id.surcharge_program = True
-        self.assertTrue(self.provider.cp_surcharge_program)
-        self.assertTrue(self.provider.markup_enabled)
-        self.provider._cp_check_surcharge_configuration()
-        self.assertEqual(self.provider._cp_checkout_amount(100, self.currency, self.partner, 'card'), 100)
+        self.fee.use_cardpointe_program = True
+        self.assertEqual(self.fee.markup_percent, 0)
         tx = self._transaction()
         values = tx._get_processing_values()
         self.assertEqual(values['amount'], 100)
@@ -53,10 +53,10 @@ class TestCardCheckout(TestInvoiceCheckout):
 
     def test_card_checkout_amount_and_document_ceiling(self):
         tx = self._transaction()
-        self.assertFalse(self.provider.cp_surcharge_program)
+        self.assertFalse(self.fee.use_cardpointe_program)
         self.assertEqual(tx._get_processing_values()['amount'], 103)
         self.assertEqual(tx._cp_document_amount(), 100)
-        self.assertEqual(self.provider._cp_checkout_amount(100, self.currency, self.partner, 'card'), 103)
+        self.assertEqual(self.fee._markup_details(100, self.currency, self.partner)['total'], 103)
         tx._cp_check_documents()
         fee = tx.markup_fee_move_id
         self.assertEqual(fee.amount_total, 3)

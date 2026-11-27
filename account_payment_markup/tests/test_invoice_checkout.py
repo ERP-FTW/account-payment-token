@@ -32,9 +32,12 @@ class TestInvoiceCheckout(TransactionCase):
         })
         cls.provider = cls.env['payment.provider'].create({
             'name': 'Synthetic markup provider', 'code': 'none',
-            'company_id': company.id, 'markup_enabled': True,
+            'company_id': company.id,
+        })
+        cls.method = cls.env.ref('payment.payment_method_card')
+        cls.fee = cls.env['payment.method.fee'].create({
+            'provider_id': cls.provider.id, 'method_id': cls.method.id,
             'markup_percent': 3, 'markup_product_id': product.id,
-            'markup_use_cardpointe_program': False,
         })
         journal = cls.env['account.journal'].create({
             'name': 'Checkout sales', 'code': 'MK19', 'type': 'sale',
@@ -74,11 +77,11 @@ class TestInvoiceCheckout(TransactionCase):
             ('invoice_origin', '=', tx.reference),
         ]), 1)
         self.assertEqual(self.invoice.amount_total, 100)
-        disclosure = self.provider._markup_portal_disclosure(
-            100, self.currency, self.partner, 'card',
+        disclosure = self.fee._markup_details(
+            100, self.currency, self.partner,
         )
         self.assertEqual(disclosure['gross_amount'], 3)
-        self.assertEqual(disclosure['total_amount'], 103)
+        self.assertEqual(disclosure['total'], 103)
         html = str(self.env['ir.qweb']._render(
             'account_payment_markup.payment_markup_disclosure',
             {'markup_disclosure': disclosure, 'currency': self.currency},
@@ -139,7 +142,7 @@ class TestInvoiceCheckout(TransactionCase):
         self.assertEqual(tx._set_done(extra_allowed_states=('cancel',)), tx)
 
     def test_disabled_checkout_remains_principal_without_fee(self):
-        self.provider.markup_enabled = False
+        self.fee.markup_percent = 0
         tx = self._transaction()
         for _ in range(2):
             values = tx._get_processing_values()
@@ -148,8 +151,8 @@ class TestInvoiceCheckout(TransactionCase):
             self.assertFalse(tx.markup_fee_move_id)
         self.assertEqual(tx.amount, 100)
         self.assertEqual(self.invoice.amount_total, 100)
-        disclosure = self.provider._markup_portal_disclosure(
-            100, self.currency, self.partner, 'card',
+        disclosure = self.fee._markup_details(
+            100, self.currency, self.partner,
         )
-        self.assertFalse(disclosure['enabled'])
-        self.assertEqual(disclosure['total_amount'], 100)
+        self.assertFalse(disclosure['amount'])
+        self.assertEqual(disclosure['total'], 100)

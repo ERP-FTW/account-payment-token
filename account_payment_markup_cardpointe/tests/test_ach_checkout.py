@@ -6,6 +6,7 @@ from lxml import html
 
 from odoo.exceptions import ValidationError
 from odoo.tests import TransactionCase, tagged
+from odoo.tools.mail import is_html_empty
 
 
 @tagged('post_install', '-at_install')
@@ -36,15 +37,19 @@ class TestOnlineManualFee(TransactionCase):
         self.ach = self.env.ref('payment_cardpointe_ach.payment_method_ach')
         self.card = self.env.ref('payment.payment_method_card')
         self.cfg = self.env['cardpointe.merchant.config'].create({
-            'name': 'Synthetic online fee config', 'mid': 'LAB-NONROUTABLE', 'surcharge_program': False,
+            'name': 'Synthetic online fee config', 'mid': 'LAB-NONROUTABLE',
             # Render only; HTTP is fenced below and no browser loads this URL.
             'tokenizer_url': 'https://synthetic.cardconnect.com/itoke/ajax-tokenizer.html'})
         self.p.write({'state': 'test', 'is_published': True, 'journal_id': self.bank.id,
             'cardpointe_merchant_config_id': self.cfg.id,
             'payment_method_ids': [(6, 0, (self.ach | self.card).ids)],
-            'cp_ach_capability_ref': 'Synthetic only', 'cp_ach_agreement_ref': 'Synthetic only',
-            'cp_ach_consumer_checking': True, 'markup_enabled': True, 'markup_percent': 3,
+            'cp_ach_agreement_ref': 'Synthetic only',
+            'cp_ach_consumer_checking': True})
+        self.ach_fee = self.env['payment.method.fee'].create({
+            'method_id': self.ach.id, 'provider_id': self.p.id, 'markup_percent': 3,
             'markup_product_id': self.product.id})
+        self.card_fee = self.env['payment.method.fee'].create({
+            'method_id': self.card.id, 'provider_id': self.p.id, 'use_cardpointe_program': True})
         self.bank.inbound_payment_method_line_ids.payment_account_id = outstanding
         # Supply only the normal Odoo request environment, not a fake access token.
         for ctx in [patch('odoo.addons.payment.utils.request', new=SimpleNamespace(env=self.env)),
@@ -72,10 +77,11 @@ class TestOnlineManualFee(TransactionCase):
             consent_amount='%.2f' % (tx.amount if consent_amount is None else consent_amount))
 
     def rendered_consent_amount(self, principal):
-        rendered = self.env['ir.qweb']._render('payment_cardpointe.inline_form', {
-            'provider_sudo': self.p, 'pm_sudo': self.ach, 'amount': principal,
+        rendered = self.env['ir.qweb']._render('payment.method_form', {
+            'providers_sudo': self.p, 'pm_sudo': self.ach, 'amount': principal,
+            'mode': 'payment', 'is_selected': True, 'payment_methods_sudo': self.ach,
             'currency': self.company.currency_id, 'partner_id': self.partner.id,
-            'request': SimpleNamespace(env=self.env),
+            'is_html_empty': is_html_empty,
         })
         node = html.fromstring(str(rendered)).xpath('//div[contains(@class,"o_cp_ach")]')[0]
         amount = node.get('data-consent-amount')
@@ -86,42 +92,49 @@ class TestOnlineManualFee(TransactionCase):
         return {'ok': True, 'data': {'respstat': 'A', 'retref': 'LAB-MANUAL-FEE',
             'merchid': tx.cp_merchant_id, 'orderid': tx.cp_order_id, 'amount': payload['amount']}}
 
-    def test_ach_program_flags_disclosure_auth_accounting_and_replay(self):
-        for program, manual_program in [(False, False), (True, False), (False, True), (True, True)]:
-            with self.subTest(program=program, manual_program=manual_program):
-                self.cfg.surcharge_program = program
-                self.p.markup_use_cardpointe_program = manual_program
-                tx = self.transaction()
-                original = tx.invoice_ids
-                consent_amount = self.rendered_consent_amount(100)
-                self.assertEqual(consent_amount, 103)
-                self.assertEqual(tx._get_processing_values()['amount'], 103)
-                fee = tx.markup_fee_move_id
-                self.assertEqual(tx._get_processing_values()['amount'], 103)
-                self.assertEqual(tx.markup_fee_move_id, fee)
-                self.assertEqual((fee.state, fee.amount_total), ('draft', 3))
-                def send(method, endpoint, payload):
-                    self.assertEqual((method, endpoint), ('PUT', 'auth'))
-                    self.assertEqual(payload['amount'], '103.00')
-                    self.assertEqual(payload['accttype'], 'ECHK')
-                    self.assertNotIn('fee_amount', payload)
-                    return self.approval(tx, payload)
-                with patch.object(type(self.p), '_cp_online_request', side_effect=send) as call:
-                    self.assertEqual(self.process(tx, float(consent_amount))['state'], 'done')
-                    tx._cp_process()
-                    self.assertEqual(call.call_count, 1)
-                self.assertIn('103.00 USD', tx.cp_ach_consent_text)
-                self.assertEqual(tx.cp_submitted_amount, 103)
-                tx._post_process()
-                self.assertEqual(fee.state, 'posted')
-                self.assertEqual(tx.payment_id.amount, 103)
-                self.assertEqual(tx.payment_id.move_id.state, 'posted')
-                self.assertEqual((original.amount_residual, fee.amount_residual), (0, 0))
-                payment = tx.payment_id
-                tx._post_process()
-                self.assertEqual(tx.payment_id, payment)
-                self.assertEqual(tx.markup_fee_move_id, fee)
-                self.assertEqual(tx.invoice_ids, original | fee)
+    def test_enrolled_card_and_manual_ach_disclosure_accounting_and_replay(self):
+        tx = self.transaction()
+        original = tx.invoice_ids
+        consent_amount = self.rendered_consent_amount(100)
+        self.assertEqual(consent_amount, 103)
+        self.assertEqual(tx._get_processing_values()['amount'], 103)
+        fee = tx.markup_fee_move_id
+        self.assertEqual(tx._get_processing_values()['amount'], 103)
+        self.assertEqual(tx.markup_fee_move_id, fee)
+        self.assertEqual((fee.state, fee.amount_total), ('draft', 3))
+        def send(method, endpoint, payload):
+            self.assertEqual((method, endpoint), ('PUT', 'auth'))
+            self.assertEqual(payload['amount'], '103.00')
+            self.assertEqual(payload['accttype'], 'ECHK')
+            self.assertNotIn('fee_amount', payload)
+            return self.approval(tx, payload)
+        with patch.object(type(self.p), '_cp_online_request', side_effect=send) as call:
+            self.assertEqual(self.process(tx, float(consent_amount))['state'], 'done')
+            tx._cp_process()
+            self.assertEqual(call.call_count, 1)
+        self.assertIn('103.00 USD', tx.cp_ach_consent_text)
+        self.assertEqual(tx.cp_submitted_amount, 103)
+        tx._post_process()
+        self.assertEqual(fee.state, 'posted')
+        self.assertEqual(tx.payment_id.amount, 103)
+        self.assertEqual(tx.payment_id.move_id.state, 'posted')
+        self.assertEqual((original.amount_residual, fee.amount_residual), (0, 0))
+        payment = tx.payment_id
+        tx._post_process()
+        self.assertEqual(tx.payment_id, payment)
+        self.assertEqual(tx.markup_fee_move_id, fee)
+        self.assertEqual(tx.invoice_ids, original | fee)
+
+
+    def test_disclosed_fee_survives_a_later_rate_change(self):
+        tx = self.transaction()
+        self.assertEqual(tx._get_processing_values()['amount'], 103)
+        fee = tx.markup_fee_move_id
+        self.ach_fee.markup_percent = 2
+        self.assertEqual(tx._get_processing_values()['amount'], 103)
+        self.assertEqual(tx.markup_fee_move_id, fee)
+        self.assertEqual(tx._get_payment_principal(), 100)
+        self.assertEqual(self.transaction()._get_processing_values()['amount'], 102)
 
     def test_stale_consent_and_changed_fee_refused_before_transport(self):
         for changed in ('consent', 'total', 'fee', 'missing', 'foreign', 'tax', 'principal'):
@@ -137,7 +150,7 @@ class TestOnlineManualFee(TransactionCase):
                 elif changed == 'foreign':
                     tx.markup_fee_move_id.ref = 'Another payment'
                 elif changed == 'tax':
-                    self.product.taxes_id = self.env['account.tax'].create({
+                    tx.markup_fee_move_id.invoice_line_ids.tax_ids = self.env['account.tax'].create({
                         'name': 'Changed fee tax', 'amount': 10, 'amount_type': 'percent', 'type_tax_use': 'sale'})
                 elif changed == 'principal':
                     tx.write({'amount': 104, 'markup_base_amount': 101, 'markup_total_amount': 104})
@@ -147,8 +160,6 @@ class TestOnlineManualFee(TransactionCase):
                     call.assert_not_called()
                 self.assertFalse(tx.cp_order_id)
                 tx._set_canceled()
-                if changed == 'tax':
-                    self.product.taxes_id = False
 
     def test_original_invoice_ceiling_and_pending_attempt_still_enforced(self):
         excessive = self.transaction(amount=101)
@@ -235,32 +246,3 @@ class TestOnlineManualFee(TransactionCase):
             self.assertEqual(call.call_count, 1)
         self.assertEqual(declined.markup_fee_move_id.state, 'cancel')
         self.assertFalse(declined.payment_id)
-
-    def test_actual_program_no_local_card_fee_or_stacking(self):
-        self.cfg.surcharge_program = True
-        self.p.markup_use_cardpointe_program = False
-        for instrument in ('unknown', 'debit', 'credit'):
-            self.assertFalse(self.p.with_context(server_trusted_markup_evidence=True)._markup_card_eligible(
-                instrument, evidence_verified=True, evidence_trusted=True, processor_surcharge_present=False))
-        for quote, fee in [({'token': 'DEBIT', 'postal': 'NOT_RESTRICTED'}, '0.00'),
-                           ({'token': 'CREDIT', 'postal': 'NOT_RESTRICTED', 'fee_amount': '3.00'}, '3.00')]:
-            tx = self.transaction(method=self.card)
-            self.assertEqual(tx._get_processing_values()['amount'], 100)
-            self.assertFalse(tx.markup_fee_move_id)
-            token = secrets.token_hex(16)
-            with patch.object(type(self.p), '_cp_online_request', return_value={'ok': True, 'data': quote}):
-                qid = tx._cp_process(token=token, postal='19000')['quote_id']
-            self.assertEqual(tx.cp_quote['subtotal'], '100.00')
-            self.assertEqual(tx.cp_quote['fee'], fee)
-            tx._set_canceled()
-        # A manually disclosed card fee cannot survive a switch into program mode.
-        self.cfg.surcharge_program = False
-        tx = self.transaction(method=self.card)
-        self.assertEqual(tx._get_processing_values()['amount'], 103)
-        self.cfg.surcharge_program = True
-        with self.assertRaises(ValidationError):
-            tx._get_processing_values()
-        with patch.object(type(self.p), '_cp_online_request') as call:
-            with self.assertRaises(ValidationError):
-                tx._cp_process(token=secrets.token_hex(16), postal='19000')
-            call.assert_not_called()

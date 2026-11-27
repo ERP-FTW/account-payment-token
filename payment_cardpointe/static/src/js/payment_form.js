@@ -38,32 +38,29 @@ patch(PaymentForm.prototype, {
         this._cpTokens?.clear();
         return super.destroy(...arguments);
     },
+    _cpFormError(form, retry) { return null; },
+    _cpFormValues(form) { return {}; },
+    _cpHandleResult(form, result) { return false; },
     async _initiatePaymentFlow(providerCode, paymentOptionId, paymentMethodCode, flow) {
         if (providerCode !== 'cardpointe') return super._initiatePaymentFlow(...arguments);
         const radio = this.el.querySelector('input[name="o_payment_radio"]:checked');
         const form = this._getInlineForm(radio).querySelector('.o_cp_form');
         const iframe = form.querySelector('iframe');
-        const ach = form.querySelector('.o_cp_ach');
-        const program = form.querySelector('.o_cp_program');
-        if (program?.dataset.quoteId && !program.querySelector('.o_cp_quote_confirm').checked) {
-            this._displayErrorDialog(_t('Quote confirmation required'), _t('Accept the displayed total before authorizing.'));
-            this._enableButton();
-            return;
-        }
         // Persist only the Odoo processing identity, NEVER the hosted token. A lost
         // response/reload therefore inquires the same gateway order, not a new debit.
         const key = 'cp-checkout:' + JSON.stringify([this.paymentContext.transactionRoute, this.paymentContext.partnerId, this.paymentContext.amount, this.paymentContext.currencyId, this.paymentContext.providerId, paymentOptionId, paymentMethodCode]);
         let values;
         try {
             const saved = sessionStorage.getItem(key);
+            const error = this._cpFormError(form, Boolean(saved));
+            if (error) {
+                this._displayErrorDialog(_t('Check payment details'), error);
+                this._enableButton();
+                return;
+            }
             if (saved) {
                 values = JSON.parse(saved);
             } else {
-                if (ach && (!ach.querySelector('.o_cp_consent').checked || !ach.querySelector('.o_cp_account_class:checked'))) {
-                    this._displayErrorDialog(_t('Authorization required'), _t('Select an enabled account class and authorize the displayed one-time amount.'));
-                    this._enableButton();
-                    return;
-                }
                 const token = this._cpTokens?.get(iframe);
                 if (!token) {
                     this._displayErrorDialog(_t('Secure form incomplete'), _t('Complete the secure Fiserv form and wait for tokenization before paying.'));
@@ -78,20 +75,9 @@ patch(PaymentForm.prototype, {
                 payment_method_code: paymentMethodCode,
                 provider_id: this.paymentContext.providerId,
                 token: this._cpTokens?.get(iframe) || null,
-                consent: ach ? ach.querySelector('.o_cp_consent').checked : null,
-                account_class: ach?.querySelector('.o_cp_account_class:checked')?.value || null,
-                consent_amount: ach?.dataset.consentAmount || null,
-                postal: program?.querySelector('.o_cp_postal').value || null,
-                quote_id: program?.dataset.quoteId || null,
+                ...this._cpFormValues(form),
             });
-            if (result.state === 'quote' || result.state === 'quote_error') {
-                if (program) {
-                    program.dataset.quoteId = result.quote_id || '';
-                    program.querySelector('.o_cp_quote_confirm').checked = false;
-                    program.querySelector('.o_cp_quote_text').textContent = result.quote
-                        ? `Subtotal ${result.quote.subtotal}; gateway fee ${result.quote.fee}; total ${result.quote.total} ${result.quote.currency}. Quote valid for five minutes.`
-                        : result.message;
-                }
+            if (this._cpHandleResult(form, result)) {
                 this._enableButton();
                 return;
             }

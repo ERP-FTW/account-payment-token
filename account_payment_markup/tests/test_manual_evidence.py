@@ -22,11 +22,6 @@ class TestManualFeeEvidence(TransactionCase):
             'name': 'Portable fee', 'type': 'service',
             'property_account_income_id': income.id, 'taxes_id': [(5, 0, 0)],
         })
-        provider = self.env['payment.provider'].create({
-            'name': 'Portable manual provider', 'code': 'none',
-            'company_id': company.id, 'markup_enabled': True,
-            'markup_percent': 3, 'markup_product_id': fee.id,
-        })
         sale = self.env['account.journal'].create({
             'name': 'Portable sale', 'code': 'PTS', 'type': 'sale',
             'company_id': company.id,
@@ -38,7 +33,8 @@ class TestManualFeeEvidence(TransactionCase):
         method = bank.inbound_payment_method_line_ids[:1]
         method.payment_account_id = outstanding
         for enabled in (True, False):
-            provider.write({'markup_enabled': enabled, 'markup_percent': 3})
+            method.write({'markup_mode': 'percentage' if enabled else 'disabled',
+                          'markup_percent': 3, 'markup_product_id': fee.id})
             invoice = self.env['account.move'].create({
                 'move_type': 'out_invoice', 'partner_id': partner.id,
                 'journal_id': sale.id, 'invoice_line_ids': [(0, 0, {
@@ -49,8 +45,7 @@ class TestManualFeeEvidence(TransactionCase):
             invoice.action_post()
             wizard = self.env['account.payment.register'].with_context(
                 active_model='account.move', active_ids=invoice.ids,
-            ).create({'journal_id': bank.id, 'payment_method_line_id': method.id,
-                      'markup_provider_id': provider.id})
+            ).create({'journal_id': bank.id, 'payment_method_line_id': method.id})
             self.assertEqual(wizard.markup_gross_amount, 3 if enabled else 0)
             self.assertEqual(wizard.markup_total_amount, 103 if enabled else 100)
             payment = wizard._create_payments()
@@ -67,7 +62,7 @@ class TestManualFeeEvidence(TransactionCase):
             fee_lines = payment.move_id.line_ids.filtered(
                 lambda line: line.markup_decision_source == 'manual')
             self.assertEqual(sum(fee_lines.mapped('credit')), 3)
-            provider.markup_percent = 9
+            method.markup_percent = 9
             refunds = payment.action_refund_markup(1) | payment.action_refund_markup(2)
             self.assertEqual(refunds.mapped('markup_source_payment_id'), payment)
             self.assertTrue(all(move.state == 'posted' for move in refunds))

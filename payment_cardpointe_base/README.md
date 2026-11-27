@@ -1,20 +1,13 @@
-# CardPointe Base (payment_cardpointe_base) — Odoo 18
+# CardPointe Base (payment_cardpointe_base) — Odoo 19
 
 Shared CardPointe Gateway configuration and client for the POS terminal modules: the merchant
 configuration record, the Gateway REST client (`inquire`, `inquireByOrderid`, `void`, `refund`,
 `sigcap`, `auth`, credential check), the return-routing service, redacted logging, and the
 `cardpointe` provider code.
 
-It provides **no online checkout and no saved-card charging** on 18.0 (see the last section).
-
-Verified on Odoo 18.0 Community (`70bdd4035000c836f9f459345e45cc4d408c68d8`) with mocked
-CardPointe responses. No request has reached CardPointe from this branch: the endpoint semantics
-below come from Fiserv's CardPointe documentation (`docs/ENDPOINTS.md` says which ones) and are
-confirmed in UAT by the steps in `pos_cardpointe_poc/README.md`.
-
 ## Merchant configuration (authoritative for POS)
 
-Top-level menu *CardPointe Merchant Configs* (system administrators only):
+Administrators can open a merchant configuration from the CardPointe provider. With CardPointe Online Payments installed, **Accounting → Configuration → Online Payments → CardPointe Merchant Configs** lists all configurations.
 
 | Field | Meaning | Set by |
 | --- | --- | --- |
@@ -22,7 +15,7 @@ Top-level menu *CardPointe Merchant Configs* (system administrators only):
 | Merchant ID (MID) | CardPointe merchant id | configuration package |
 | Gateway Base URL | `https://<site>-uat.cardconnect.com/cardconnect/rest/` (UAT) or `https://<site>.cardconnect.com/cardconnect/rest/` (production) — the environment selection | configuration package |
 | Gateway Username / Password | Gateway API credentials (HTTP Basic). Optional on the record, required before any call; the password is system-only | authorized operator, from the credential reference |
-| Tokenizer URL | Hosted iFrame Tokenizer URL, only for POS manual entry | configuration package, when manual entry is in scope |
+| Tokenizer URL | Hosted iFrame Tokenizer URL for online checkout and POS manual entry | configuration package, when manual entry is in scope |
 | Timeouts, debug logging | connection/read timeouts; debug adds redacted payloads | client tuning |
 
 **Test Credentials** (header button) sends CardPointe's documented credential check — a `PUT` to the
@@ -56,18 +49,6 @@ modules read; edit that one.
 
 Gateway requests log method, path, masked headers and redacted payloads; responses are sanitized
 (signatures, receipts and EMV data removed). Card numbers and CVV are never stored or logged.
-
-## Saved-card (token) charging: not implemented on 18.0
-
-`payment_token_partner_form` and `payment_token_invoice` are provider-agnostic. On 18.0 no module
-implements CardPointe tokenization or `_send_payment_request` for code `cardpointe`, so a CardPointe
-token cannot be created through the partner form nor charged from an invoice: Odoo 18's base
-`_send_payment_request` only checks the provider and logs. This is an `enhancement`, not
-configuration. The reusable source is the 16.0 `payment_cardpointe` module of this repository
-(with `payment_token_base` / `payment_token_autocharge`), which has the Gateway profile calls and a
-`_send_payment_request` override; a port to 18 needs `payment.method` records, the Odoo 18
-`payment_form` JS API, `(env)` hooks, and its `_send_payment_request` fixed to call `super()`
-(16.0 assigns `super()` without calling it).
 
 ## Tests
 
