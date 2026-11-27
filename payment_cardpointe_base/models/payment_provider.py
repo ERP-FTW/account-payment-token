@@ -116,6 +116,7 @@ class PaymentProvider(models.Model):
                 raise UserError(_("CardPointe: set the merchant id (MID) before testing the connection."))
             response = self._cardpointe_request(
                 'PUT', ENDPOINT_TEST_CONNECTION, payload={'merchid': self.cardpointe_mid},
+                headers={'Accept': '*/*'},  # The REST root returns an HTML servlet banner.
             )
             if response['ok'] and TEST_CONNECTION_MARKER not in (response.get('text') or '').lower():
                 response = dict(
