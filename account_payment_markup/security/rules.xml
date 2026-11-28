@@ -1,7 +1,0 @@
-<odoo>
-    <record id="method_fee_company_rule" model="ir.rule">
-        <field name="name">Payment method fees by company</field>
-        <field name="model_id" ref="model_payment_method_fee"/>
-        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
-    </record>
-</odoo>

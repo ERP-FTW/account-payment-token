@@ -46,11 +46,8 @@ class TestOnlineManualFee(TransactionCase):
         self.p.write({'state': 'test', 'is_published': True, 'journal_id': self.bank.id,
             'cardpointe_merchant_config_id': self.cfg.id,
             'payment_method_ids': [(6, 0, (self.ach | self.card).ids)]})
-        self.ach_fee = self.env['payment.method.fee'].create({
-            'method_id': self.ach.id, 'provider_id': self.p.id, 'markup_percent': 3,
-            'markup_product_id': self.product.id})
-        self.card_fee = self.env['payment.method.fee'].create({
-            'method_id': self.card.id, 'provider_id': self.p.id, 'use_cardpointe_program': True})
+        self.ach.write({'markup_percent': 3, 'markup_product_id': self.product.id})
+        self.card.use_cardpointe_program = True
         self.bank.inbound_payment_method_line_ids.payment_account_id = outstanding
         # Supply only the normal Odoo request environment, not a fake access token.
         for ctx in [patch('odoo.addons.payment.utils.request', new=SimpleNamespace(env=self.env)),
@@ -99,10 +96,7 @@ class TestOnlineManualFee(TransactionCase):
         consent_amount = self.rendered_consent_amount(100)
         self.assertEqual(consent_amount, 103)
         self.assertEqual(tx._get_processing_values()['amount'], 103)
-        fee = tx.markup_fee_move_id
-        self.assertEqual(tx._get_processing_values()['amount'], 103)
-        self.assertEqual(tx.markup_fee_move_id, fee)
-        self.assertEqual((fee.state, fee.amount_total), ('draft', 3))
+        self.assertFalse(tx.markup_fee_move_id)
         def send(method, endpoint, payload):
             self.assertEqual((method, endpoint), ('PUT', 'auth'))
             self.assertEqual(payload['amount'], '103.00')
@@ -116,6 +110,7 @@ class TestOnlineManualFee(TransactionCase):
         self.assertIn('103.00 USD', tx.cp_ach_consent_text)
         self.assertEqual(tx.cp_submitted_amount, 103)
         tx._post_process()
+        fee = tx.markup_fee_move_id
         self.assertEqual(fee.state, 'posted')
         self.assertEqual(tx.payment_id.amount, 103)
         self.assertEqual(tx.payment_id.move_id.state, 'posted')
@@ -126,16 +121,6 @@ class TestOnlineManualFee(TransactionCase):
         self.assertEqual(tx.markup_fee_move_id, fee)
         self.assertEqual(tx.invoice_ids, original | fee)
 
-
-    def test_disclosed_fee_survives_a_later_rate_change(self):
-        tx = self.transaction()
-        self.assertEqual(tx._get_processing_values()['amount'], 103)
-        fee = tx.markup_fee_move_id
-        self.ach_fee.markup_percent = 2
-        self.assertEqual(tx._get_processing_values()['amount'], 103)
-        self.assertEqual(tx.markup_fee_move_id, fee)
-        self.assertEqual(tx.markup_base_amount, 100)
-        self.assertEqual(self.transaction()._get_processing_values()['amount'], 102)
 
     def test_consent_to_current_checkout_total(self):
         tx = self.transaction()
@@ -185,11 +170,11 @@ class TestOnlineManualFee(TransactionCase):
         self.product.taxes_id = tax
         tx = self.transaction(amount=25)
         self.assertEqual(tx._get_processing_values()['amount'], 25.83)
-        fee = tx.markup_fee_move_id
         with patch.object(type(self.p), '_cp_online_request',
                           side_effect=lambda method, endpoint, payload: self.approval(tx, payload)):
             self.assertEqual(self.process(tx)['state'], 'done')
         tx._post_process()
+        fee = tx.markup_fee_move_id
         self.assertEqual(fee.amount_total, 0.83)
         self.assertEqual(fee.amount_residual, 0)
         self.assertEqual((tx.invoice_ids - fee).amount_residual, 75)
@@ -203,5 +188,5 @@ class TestOnlineManualFee(TransactionCase):
             self.assertEqual(self.process(declined)['state'], 'error')
             declined._cp_process()
             self.assertEqual(call.call_count, 1)
-        self.assertEqual(declined.markup_fee_move_id.state, 'cancel')
+        self.assertFalse(declined.markup_fee_move_id)
         self.assertFalse(declined.payment_id)

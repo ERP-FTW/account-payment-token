@@ -1,0 +1,3 @@
+.form-check:has(input[name="o_payment_radio"]:not(:checked)) .o_manual_payment_fee {
+    display: none;
+}

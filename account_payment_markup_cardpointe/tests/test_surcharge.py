@@ -18,9 +18,7 @@ class TestSurcharge(TransactionCase):
         self.card = self.env.ref('payment.payment_method_card')
         self.cfg = self.env['cardpointe.merchant.config'].create({'name':'Synthetic program fixture', 'mid':'LAB-NONROUTABLE'})
         self.p.write({'state':'test','is_published':True,'cardpointe_merchant_config_id':self.cfg.id,'payment_method_ids':[(6,0,self.card.ids)]})
-        self.fee = self.env['payment.method.fee'].create({
-            'provider_id': self.p.id, 'method_id': self.card.id, 'use_cardpointe_program': True,
-        })
+        self.card.use_cardpointe_program = True
         self.partner = self.env['res.partner'].create({'name':'Synthetic surcharge payer', 'country_id':self.env.ref('base.us').id})
         self.token = secrets.token_hex(16)
         ctx = patch('odoo.addons.payment.utils.request', new=SimpleNamespace(env=self.env))

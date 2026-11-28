@@ -1,16 +1,12 @@
 {
     'name': 'Account Payment Markup',
-    'version': '19.0.2.0.1',
+    'version': '19.0.3.0.0',
     'category': 'Accounting/Payment Providers',
-    'summary': 'Manual fees on inbound journal methods and online payment methods',
+    'summary': 'Add the selected payment method’s fee product at checkout',
     'depends': ['account_payment'],
-    'data': [
-        'security/ir.model.access.csv', 'security/rules.xml', 'data/product.xml',
-        'views/online_method.xml',
-        'views/payment_method_views.xml',
-        'views/payment_register_views.xml',
-        'views/payment_portal_templates.xml',
-    ],
+    'data': ['views/online_method.xml', 'views/payment_portal_templates.xml'],
+    'assets': {
+        'web.assets_frontend': ['account_payment_markup/static/src/checkout.css'],
+    },
     'license': 'LGPL-3',
-    'installable': True,
 }

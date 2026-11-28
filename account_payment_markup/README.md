@@ -1,7 +1,3 @@
-# Manual payment fees for Odoo 19
+# Manual checkout markup
 
-For online checkout, open a **Payment Method → Payment fees**, select its provider and enter the manual percentage. The fee is zero until configured. The fee product supplies the income account and taxes. The same calculation supplies the amount shown at checkout and the amount sent for payment.
-
-For **Register Payment**, set the fee on the journal’s inbound payment method line. Choose disabled, percentage or fixed amount. Selecting a disabled line leaves the payment at its original amount.
-
-Existing posted entries retain their amounts. Refunds use the original payment’s fee. On upgrade, existing provider rates are copied to that provider’s enabled methods.
+On the payment method, set **Markup (%)** and **Fee product**. Zero disables the fee. Checkout shows the selected product’s fee and the total, using the product’s normal sales taxes. On success, the product is added to the sales order or draft invoice. For a posted invoice, Odoo posts a linked fee invoice and reconciles both with the payment.
