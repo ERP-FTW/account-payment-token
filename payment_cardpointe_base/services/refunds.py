@@ -1,4 +1,13 @@
+from decimal import Decimal, InvalidOperation
+
 from .gateway import sanitize_for_log
+
+
+_SUCCESS_CODES = {'000', '00'}
+_SETTLED_VALUES = {
+    '1', 'y', 'yes', 'accepted', 'settled', 'settle', 'complete', 'completed',
+    'captured', 'batched', 'batch',
+}
 
 
 def _extract_data(response):
@@ -7,52 +16,158 @@ def _extract_data(response):
     return response if isinstance(response, dict) else {}
 
 
-def _is_settled_for_refund(resp):
-    data = _extract_data(resp)
-    text = (data.get('resptext') or '').lower()
-    code = str(data.get('respcode') or '')
-    return code in {'12', '400'} or 'settled' in text or 'batched' in text
+def _response_message(response):
+    data = _extract_data(response)
+    if isinstance(response, dict):
+        message = response.get('message')
+        if isinstance(message, str) and message.strip():
+            return message
+        error = _error_issue(response)
+        return error or data.get('resptext')
+    return _error_issue(response) or data.get('resptext')
+
+
+def _error_issue(response):
+    """Return explicit error text, or a validation error for malformed errors."""
+    data = _extract_data(response)
+    values = []
+    if isinstance(response, dict):
+        values.append(('response', response.get('error')))
+    values.append(('transaction', data.get('error')))
+    for field, value in values:
+        if value is None or value is False:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return value.strip()
+            continue
+        return f'CardPointe {field} returned malformed error'
+    return None
+
+
+def _has_explicit_failure(response):
+    data = _extract_data(response)
+    if _error_issue(response):
+        return True
+    status = str(data.get('respstat') or '').strip().upper()
+    code_value = data.get('respcode')
+    if isinstance(code_value, bool):
+        return True
+    code = str(code_value or '').strip()
+    return status in {'D', 'E'} or (code and code not in _SUCCESS_CODES)
 
 
 def _is_approved(resp):
     data = _extract_data(resp)
+    if _has_explicit_failure(resp):
+        return False
     respstat = (data.get('respstat') or '').upper()
     respcode = str(data.get('respcode') or '')
     resptext = (data.get('resptext') or '').strip().lower()
-    return respstat == 'A' or respcode in {'000', '00'} or resptext.startswith('approv')
+    return respstat == 'A' or respcode in _SUCCESS_CODES or resptext.startswith('approv')
 
 
-def _is_already_voided(resp):
+def _is_settled_for_refund(resp):
     data = _extract_data(resp)
-    text = (data.get('resptext') or '').strip().lower()
+    text = (data.get('resptext') or '').lower()
     code = str(data.get('respcode') or '')
-    return code in {'24'} and ('reversal not supported' in text or 'already' in text and 'void' in text)
+    # Negative settlement evidence must win over generic text such as
+    # "Already settled" matching the substring in "Txn not settled".
+    if is_txn_not_settled(resp):
+        return False
+    return code in {'12', '400'} or 'settled' in text or 'batched' in text
+
 
 def is_txn_not_settled(resp):
     data = _extract_data(resp)
-    return data.get('respcode') == '28' or 'not settled' in (data.get('resptext') or '').lower()
+    return str(data.get('respcode') or '') == '28' or 'not settled' in (data.get('resptext') or '').lower()
 
 
-def choose_operation_from_inquire(inquire):
+def _flag(data, name):
+    value = data.get(name)
+    return None if value is None else str(value).strip().lower() in {'y', 'yes', 'true', '1'}
+
+
+def _money(value):
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError, TypeError):
+        return None
+    return parsed if parsed.is_finite() and parsed > 0 else None
+
+
+def _is_full_amount(original_amount, requested_amount):
+    original = _money(original_amount)
+    requested = _money(requested_amount)
+    return original is not None and requested is not None and original == requested
+
+
+def _void_allowed(data, requested_amount):
+    return _is_full_amount(data.get('amount'), requested_amount) and _flag(data, 'voidable') is not False
+
+
+def _refund_allowed(data):
+    return _flag(data, 'refundable') is not False
+
+
+def _validate_inquiry_transaction(inquire_data, requested_retref):
+    if not isinstance(inquire_data, dict) or not inquire_data:
+        return 'CardPointe inquiry returned no transaction data'
+    inquiry_retref = inquire_data.get('retref')
+    if not isinstance(inquiry_retref, str) or not inquiry_retref.strip():
+        return 'CardPointe inquiry returned no transaction reference'
+    if not isinstance(requested_retref, str) or inquiry_retref.strip() != requested_retref.strip():
+        return 'CardPointe inquiry transaction reference does not match the requested reference'
+
+    error_issue = _error_issue(inquire_data)
+    if error_issue:
+        return error_issue
+
+    # These fields control financial routing.  Reject structured values before
+    # string coercion can make malformed gateway data look like a valid status.
+    string_fields = ('setlstat', 'respstat', 'resptext')
+    for field in string_fields:
+        value = inquire_data.get(field)
+        if value is not None and not isinstance(value, str):
+            return f'CardPointe inquiry returned malformed {field}'
+    respcode = inquire_data.get('respcode')
+    if isinstance(respcode, bool) or (respcode is not None and not isinstance(respcode, (str, int))):
+        return 'CardPointe inquiry returned malformed respcode'
+    amount = inquire_data.get('amount')
+    if amount is not None and (isinstance(amount, bool) or not isinstance(amount, (str, int, float, Decimal))):
+        return 'CardPointe inquiry returned malformed amount'
+    for field in ('voidable', 'refundable'):
+        value = inquire_data.get(field)
+        if value is not None and (isinstance(value, (dict, list, tuple, set))):
+            return f'CardPointe inquiry returned malformed {field}'
+    return None
+
+
+def choose_operation_from_inquire(inquire, amount=None):
     data = _extract_data(inquire)
+    if not _is_full_amount(data.get('amount'), amount):
+        return 'refund'
     settle_status = str(data.get('setlstat') or '').strip().lower()
-    if not settle_status:
-        return 'void'
+    return 'refund' if settle_status in _SETTLED_VALUES else 'void'
 
-    settled_values = {
-        '1', 'y', 'yes', 'settled', 'settle', 'complete', 'completed', 'captured', 'batched', 'batch',
-    }
-    return 'refund' if settle_status in settled_values else 'void'
+
+def _envelope_is_success(response):
+    """Return whether the gateway transport/envelope authorizes interpretation."""
+    return isinstance(response, dict) and response.get('ok') is not False
 
 
 def _normalize_result(operation, retref, response, raw=None):
     data = _extract_data(response)
+    # The transport/envelope result is authoritative over nested gateway data.
+    # A failed inquiry or validation rejection must never look approved.
+    envelope_ok = _envelope_is_success(response)
     return {
-        'ok': _is_approved(response) or (operation == 'void' and _is_already_voided(response)),
+        'ok': envelope_ok and _is_approved(response),
         'operation': operation,
         'respstat': data.get('respstat'),
         'respcode': data.get('respcode'),
         'resptext': data.get('resptext'),
+        'message': _response_message(response),
         'retref': data.get('retref') or retref,
         'authcode': data.get('authcode'),
         'raw': sanitize_for_log(raw or data),
@@ -60,52 +175,88 @@ def _normalize_result(operation, retref, response, raw=None):
 
 
 def execute_void_or_refund(gw_client, merchid, retref, amount, orderid=None):
-    inquire = gw_client.inquire(retref, merchid)
-    operation = choose_operation_from_inquire(inquire)
+    requested_amount = _money(amount)
+    try:
+        inquire = gw_client.inquire(retref, merchid)
+    except Exception as exc:
+        inquire = {
+            'ok': False,
+            'message': f'CardPointe inquiry failed: {exc}',
+            'data': {},
+        }
     inquire_data = _extract_data(inquire)
 
-    if str(inquire_data.get('setlstat') or '').strip().lower() == 'voided':
-        synthetic = {
-            'respstat': 'A',
-            'respcode': '000',
-            'resptext': 'Approval',
-            'retref': inquire_data.get('retref') or retref,
-            'authcode': inquire_data.get('authcode'),
-        }
-        return _normalize_result('void', retref, synthetic, {
+    if not isinstance(inquire, dict) or inquire.get('ok') is False:
+        return _normalize_result('inquire', retref, inquire, {
             'inquire': inquire_data,
             'orderid': orderid,
-            'note': 'already_voided',
         })
+    inquiry_error = _error_issue(inquire)
+    if inquiry_error:
+        return _normalize_result('inquire', retref, {
+            'ok': False,
+            'message': inquiry_error,
+            'data': inquire_data,
+        }, {'inquire': inquire_data, 'orderid': orderid})
+    inquiry_error = _validate_inquiry_transaction(inquire_data, retref)
+    if inquiry_error:
+        return _normalize_result('inquire', retref, {
+            'ok': False,
+            'message': inquiry_error,
+            'data': inquire_data,
+        }, {'inquire': inquire_data, 'orderid': orderid})
+    if _has_explicit_failure(inquire):
+        return _normalize_result('inquire', retref, inquire, {
+            'inquire': inquire_data,
+            'orderid': orderid,
+        })
+    if str(inquire_data.get('setlstat') or '').strip().lower() == 'voided':
+        return _normalize_result('inquire', retref, {
+            'respstat': 'D',
+            'respcode': '24',
+            'resptext': 'Transaction is already voided',
+            'retref': inquire_data.get('retref') or retref,
+        }, {'inquire': inquire_data, 'orderid': orderid})
+    if requested_amount is None:
+        return _normalize_result('inquire', retref, {
+            'respstat': 'D', 'respcode': '13',
+            'resptext': 'Refund amount must be a positive decimal amount',
+        }, {'inquire': inquire_data, 'orderid': orderid})
+
+    full_amount = _is_full_amount(inquire_data.get('amount'), requested_amount)
+    operation = choose_operation_from_inquire(inquire, requested_amount)
+    if operation == 'void' and not _void_allowed(inquire_data, requested_amount):
+        operation = 'refund'
+    if operation == 'refund' and not _refund_allowed(inquire_data):
+        return _normalize_result('refund', retref, {
+            'respstat': 'D', 'respcode': '26', 'resptext': 'Transaction is not refundable',
+        }, {'inquire': inquire_data, 'orderid': orderid})
 
     if operation == 'void':
         void_result = gw_client.void(merchid, retref)
-        if not _is_approved(void_result) and amount and _is_settled_for_refund(void_result):
+        if (_envelope_is_success(void_result) and not _error_issue(void_result)
+                and not _is_approved(void_result)
+                and full_amount and _void_allowed(inquire_data, requested_amount)
+                and _is_settled_for_refund(void_result) and _refund_allowed(inquire_data)):
             refund_result = gw_client.refund(merchid, retref, amount)
             return _normalize_result('refund', retref, refund_result, {
-                'inquire': inquire_data,
-                'void': _extract_data(void_result),
-                'refund': _extract_data(refund_result),
-                'orderid': orderid,
+                'inquire': inquire_data, 'void': _extract_data(void_result),
+                'refund': _extract_data(refund_result), 'orderid': orderid,
             })
         return _normalize_result('void', retref, void_result, {
-            'inquire': inquire_data,
-            'void': _extract_data(void_result),
-            'orderid': orderid,
+            'inquire': inquire_data, 'void': _extract_data(void_result), 'orderid': orderid,
         })
 
     refund_result = gw_client.refund(merchid, retref, amount)
-    if is_txn_not_settled(refund_result):
+    if (_envelope_is_success(refund_result) and not _error_issue(refund_result)
+            and not _is_approved(refund_result)
+            and is_txn_not_settled(refund_result)
+            and full_amount and _void_allowed(inquire_data, requested_amount)):
         void_result = gw_client.void(merchid, retref)
         return _normalize_result('void', retref, void_result, {
-            'inquire': inquire_data,
-            'refund': _extract_data(refund_result),
-            'void': _extract_data(void_result),
-            'orderid': orderid,
+            'inquire': inquire_data, 'refund': _extract_data(refund_result),
+            'void': _extract_data(void_result), 'orderid': orderid,
         })
-
     return _normalize_result('refund', retref, refund_result, {
-        'inquire': inquire_data,
-        'refund': _extract_data(refund_result),
-        'orderid': orderid,
+        'inquire': inquire_data, 'refund': _extract_data(refund_result), 'orderid': orderid,
     })

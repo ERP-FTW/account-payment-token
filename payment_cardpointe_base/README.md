@@ -1,8 +1,8 @@
 # CardPointe Base (payment_cardpointe_base)
 
 This module provides shared CardPointe configuration and API client helpers for Odoo 16 payment
-providers. It includes provider fields, redacted logging, error mapping, and diagnostics, but no
-checkout UI.
+providers. It includes provider fields, redacted logging, error mapping, diagnostics, and the
+shared POS refund-routing service, but no checkout UI.
 
 ## Configuration
 
@@ -29,29 +29,14 @@ described in `docs/ENDPOINTS.md`.
 
 ## Logs
 
-CardPointe logs are tagged with `[CARDPOINTE]`. Example search:
+CardPointe logs are tagged with `[CARDPOINTE]`.
 
-```bash
-rg "\[CARDPOINTE\]" -n odoo.log
-```
+## Refund routing
 
-## Developer Mode
-
-Example `curl` call to the ecommerce process route (requires a valid transaction reference and
-access token):
-
-```bash
-curl -X POST https://your-odoo.test/payment/cardpointe/process \
-  -H "Content-Type: application/json" \
-  -d '{"reference": "SO123-1", "access_token": "...", "token": "tok_..."}'
-```
-
-Tail logs for correlation IDs:
-
-```bash
-tail -f odoo.log | rg "\[CARDPOINTE\]"
-```
-
-## Refund fallback behavior
-
-If a gateway refund response returns `respcode=28` (`Txn not settled`), the base refund service will automatically retry as a void for the same `retref`.
+Every refund first performs an inquiry. The inquiry must contain a non-empty transaction with the
+same reference that was requested; malformed, mismatched, failed, or explicitly declined inquiries
+stop without a financial mutation. A full unsettled return uses an amountless void only when the inquiry reports
+a known positive original amount exactly equal to the requested amount and does not prohibit
+voiding. Partial returns always call `refund` for their exact amount. Settled/full returns use
+`refund` when eligible; a `respcode=28` partial-refund response is returned as a failure and is
+never converted into a full void. A full void may fall back to the exact full refund only when the void response indicates settlement and the inquiry still permits both operations. Conversely, a full refund may fall back to an amountless void only after an authoritative non-approved refund response specifically indicating `Txn not settled`/code 28, exact positive full amount match, and permitted void eligibility; approved/transport-failed, partial, prohibited, or negative evidence on a void response never authorize a second mutation.
