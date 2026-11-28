@@ -13,6 +13,7 @@ CONSENT_VERSION = 'one-time-ach-v1'
 class PaymentProvider(models.Model):
     _inherit = 'payment.provider'
 
+    # Retain historical configuration on existing databases. Checkout uses the chosen account type.
     cp_ach_agreement_ref = fields.Char(string='Signed company agreement evidence reference (CCD)', groups='base.group_system')
     cp_ach_consumer_checking = fields.Boolean(string='Enable consumer checking (WEB)')
     cp_ach_consumer_savings = fields.Boolean(string='Enable consumer savings (WEB)')
@@ -21,8 +22,7 @@ class PaymentProvider(models.Model):
 
     def _cp_ach_options(self):
         self.ensure_one()
-        return [(key, info[0]) for key, info in ACCOUNT_CLASSES.items()
-                if self['cp_ach_'+key] and (info[2] != 'CCD' or self.cp_ach_agreement_ref)]
+        return [(key, info[0]) for key, info in ACCOUNT_CLASSES.items()]
 
     def _cp_ach_consent(self, amount, currency):
         return ('I authorize %s to initiate a one-time ACH debit of %.2f %s from the bank account entered in the secure Fiserv form. This authorization applies only to this payment. Gateway acceptance does not mean bank funding is complete.' % (self.company_id.name, amount, currency.name))

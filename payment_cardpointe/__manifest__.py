@@ -1,6 +1,6 @@
 {
     'name': 'CardPointe Online Payments',
-    'version': '19.0.2.0.0', 'license': 'LGPL-3',
+    'version': '19.0.2.0.1', 'license': 'LGPL-3',
     'author': 'ERP-FTW',
     'depends': ['payment_cardpointe_base', 'account_payment'],
     'post_init_hook': 'post_init_hook',

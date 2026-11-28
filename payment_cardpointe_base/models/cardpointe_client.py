@@ -26,14 +26,15 @@ def _cardpointe_build_url(api_base, endpoint):
 
 def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, timeout=None):
     """Perform a CardPointe API request and return a normalized response dict."""
-    if not provider.cardpointe_api_base:
+    config = provider.cardpointe_merchant_config_id if provider.env.context.get('cardpointe_online_private') else None
+    api_base = config.gateway_base_url if config else provider.cardpointe_api_base
+    if not api_base:
         raise UserError(_("CardPointe: missing API base URL."))
 
     correlation_id = uuid.uuid4().hex
     tx_reference = provider.env.context.get('cardpointe_tx_reference')
     operation = f"{method} {endpoint}"
 
-    api_base = provider.cardpointe_api_base
     url = _cardpointe_build_url(api_base, endpoint)
 
     try:
@@ -69,10 +70,12 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
         operation, url, tx_reference or '-', correlation_id,
     )
 
-    connect_timeout = provider.cardpointe_timeout_connect
-    read_timeout = provider.cardpointe_timeout_read
+    connect_timeout = config.timeout_connect if config else provider.cardpointe_timeout_connect
+    read_timeout = config.timeout_read if config else provider.cardpointe_timeout_read
     request_timeout = timeout or (connect_timeout, read_timeout)
 
+    username = config.gateway_username if config else provider.cardpointe_username
+    password = config.gateway_password if config else provider.cardpointe_password
     try:
         http_status, _response_headers, response_text, response_data = request_json(
             method=method,
@@ -81,7 +84,7 @@ def _cardpointe_request(provider, method, endpoint, payload=None, headers=None, 
             json=None if method == 'GET' else payload,
             **({'params': payload} if method == 'GET' and payload is not None else {}),
             timeout=request_timeout,
-            auth=(provider.cardpointe_username or '', provider.cardpointe_password or ''),
+            auth=(username or '', password or ''),
         )
     except CardPointeRequestError as exc:
         lower = str(exc).lower()

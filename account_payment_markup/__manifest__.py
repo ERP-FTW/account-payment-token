@@ -1,6 +1,6 @@
 {
     'name': 'Account Payment Markup',
-    'version': '19.0.2.0.0',
+    'version': '19.0.2.0.1',
     'category': 'Accounting/Payment Providers',
     'summary': 'Manual fees on inbound journal methods and online payment methods',
     'depends': ['account_payment'],

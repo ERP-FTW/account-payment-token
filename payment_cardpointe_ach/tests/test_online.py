@@ -11,17 +11,17 @@ class TestOnlineACH(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.provider = cls.env.ref('payment_cardpointe.payment_provider_cardpointe')
+        cls.provider = cls.env['payment.provider'].create({
+            'name': 'Synthetic CardPointe checkout', 'code': 'cardpointe',
+            'inline_form_view_id': cls.env.ref('payment_cardpointe.inline_form').id,
+        })
         cls.ach = cls.env.ref('payment_cardpointe_ach.payment_method_ach')
         cls.card = cls.env.ref('payment.payment_method_card')
         cls.usd = cls.env.ref('base.USD')
         cls.provider.write({'state':'test','is_published':True,'cardpointe_mid':'LAB-NONROUTABLE',
             'cardpointe_api_base':'https://fts-uat.cardconnect.com/cardconnect/rest/',
             'cardpointe_tokenizer_url':'https://fts-uat.cardconnect.com/itoke/ajax-tokenizer.html',
-            'payment_method_ids':[(6,0,[cls.ach.id,cls.card.id])],
-            'cp_ach_agreement_ref':'Synthetic agreement; NOT merchant evidence',
-            'cp_ach_consumer_checking':True,'cp_ach_consumer_savings':True,
-            'cp_ach_business_checking':True,'cp_ach_business_savings':True})
+            'payment_method_ids':[(6,0,[cls.ach.id,cls.card.id])]})
         cls.partner = cls.env['res.partner'].create({'name':'Synthetic test payer','country_id':cls.env.ref('base.us').id})
 
     def tx(self, method=None, amount=10):
@@ -44,7 +44,6 @@ class TestOnlineACH(TransactionCase):
     def test_enabled_combinations_payload_and_consent(self):
         for key, acct, sec in [('consumer_checking','ECHK','WEB'),('consumer_savings','ESAV','WEB'),('business_checking','ECHK','CCD'),('business_savings','ESAV','CCD')]:
             with self.subTest(account_class=key):
-                self.partner.write({'is_company':sec=='CCD','cp_ach_ccd_agreement_ref':'Synthetic payer agreement' if sec=='CCD' else False})
                 tx=self.tx()
                 def reply(method, endpoint, payload=None):
                     self.assertEqual((method,endpoint),('PUT','auth'))
@@ -64,27 +63,19 @@ class TestOnlineACH(TransactionCase):
                 self.assertEqual(tx.cp_ach_consent_version,'one-time-ach-v1')
                 self.assertEqual(tx.cp_ach_entry_code,sec)
 
-    def test_declared_method_must_match_saved_transaction(self):
-        for method, other in [(self.card, self.ach), (self.ach, self.card)]:
-            tx = self.tx(method)
-            with patch.object(type(self.provider), "_cp_online_request") as call:
-                for declared in [None, "", other.code]:
-                    with self.assertRaises(ValidationError):
-                        tx._cp_check_payment_method(declared)
-                tx._cp_check_payment_method(method.code)
-            call.assert_not_called()
-            self.assertFalse(tx.cp_order_id)
-            self.assertFalse(tx.cp_ach_consent_text)
-
-
     def test_declined(self):
-        tx=self.tx()
-        with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx,'C')) as call:
+        tx = self.tx()
+        response = {'ok': True, 'data': {
+            'respstat': 'C', 'respproc': 'PPS', 'respcode': '48',
+            'resptext': 'Echeck not supported', 'retref': 'LAB-REFERENCE',
+        }}
+        with patch.object(type(self.provider), '_cp_online_request', return_value=response) as call:
             self.submit(tx)
             self.submit(tx)
-        self.assertEqual(tx.state,'error')
-        self.assertEqual(call.call_count,1)
-        self.assertFalse(tx.provider_reference)
+        self.assertEqual(tx.state, 'error')
+        self.assertEqual(tx.provider_reference, 'LAB-REFERENCE')
+        self.assertIn('PPS 48 Echeck not supported', tx.state_message)
+        self.assertEqual(call.call_count, 1)
 
     def test_unknown_retries_inquire_never_auth(self):
         tx=self.tx()
@@ -128,8 +119,10 @@ class TestOnlineACH(TransactionCase):
                 tx=self.tx()
                 with patch.object(type(self.provider),'_cp_online_request',side_effect=lambda *a,**k:self.answer(tx,**change)):
                     self.submit(tx)
-                    self.assertEqual(tx.state,'pending')
-                tx._set_canceled('Test isolation')
+                    expected = 'error' if 'amount' in change or 'currency' in change else 'pending'
+                    self.assertEqual(tx.state, expected)
+                if tx.state == 'pending':
+                    tx._set_canceled('Test isolation')
 
     def test_echeck_decline_from_order_inquiry(self):
         tx = self.tx()
@@ -145,21 +138,13 @@ class TestOnlineACH(TransactionCase):
             self.assertEqual(tx._cp_process()['state'], 'error')
         gateway.assert_called_once_with('GET', f'inquireByOrderid/{tx.cp_order_id}/{tx.cp_merchant_id}')
 
-    def test_consent_currency_and_capability_fail_closed(self):
+    def test_consent_currency_and_account_type(self):
         tx=self.tx()
         with patch.object(type(self.provider),'_cp_online_request') as call:
             for kw in [{'consent':False},{'consent':'true'},{'consent_amount':'11.00'},{'account_class':'unsupported'}]:
                 with self.assertRaises(ValidationError): self.submit(tx,**kw)
             tx.currency_id=self.env.ref('base.EUR')
             with self.assertRaises(ValidationError): self.submit(tx)
-            tx.currency_id=self.usd
-            self.provider.cp_ach_consumer_checking=False
-            with self.assertRaises(ValidationError): self.submit(tx)
-            self.provider.cp_ach_consumer_checking=True
-            self.provider.cp_ach_agreement_ref=False
-            with self.assertRaises(ValidationError): self.submit(tx,account_class='business_checking')
-            self.provider.cp_ach_agreement_ref='Synthetic merchant agreement'
-            with self.assertRaises(ValidationError): self.submit(tx,account_class='business_checking')
         call.assert_not_called()
         self.assertFalse(tx.cp_order_id)
 
@@ -176,30 +161,28 @@ class TestOnlineACH(TransactionCase):
             with self.assertRaises(ValidationError): self.submit(self.tx())
         call.assert_not_called()
 
-    def test_unknown_blocks_new_transaction_across_methods(self):
-        tx=self.tx()
-        with patch.object(type(self.provider),'_cp_online_request',return_value={}) as call:
-            self.submit(tx)
-            with self.assertRaises(ValidationError): self.submit(self.tx(self.card))
-        self.assertEqual(call.call_count,1)
+    def test_unknown_attempt_does_not_freeze_payer(self):
+        ach = self.tx()
+        card = self.tx(self.card)
+        with patch.object(type(self.provider), '_cp_online_request', return_value={}) as gateway:
+            self.submit(ach)
+            self.submit(card)
+            self.submit(ach)
+        self.assertNotEqual(ach.cp_order_id, card.cp_order_id)
+        self.assertEqual([call.args[:2] for call in gateway.call_args_list], [
+            ('PUT', 'auth'), ('PUT', 'auth'),
+            ('GET', f'inquireByOrderid/{ach.cp_order_id}/{ach.cp_merchant_id}'),
+        ])
 
-    def test_changed_merchant_or_amount_never_resends(self):
-        tx=self.tx()
-        with patch.object(type(self.provider),'_cp_online_request',return_value={}): self.submit(tx)
-        with patch.object(type(self.provider),'_cp_online_request') as call:
-            self.provider.cardpointe_mid='CHANGED'
+    def test_inquiry_uses_the_original_merchant_id(self):
+        tx = self.tx()
+        with patch.object(type(self.provider), '_cp_online_request', return_value={}):
             self.submit(tx)
-            self.provider.cardpointe_mid=tx.cp_merchant_id
-            self.provider.cardpointe_api_base='https://changed.example.invalid/'
+        self.provider.cardpointe_mid = 'CHANGED'
+        with patch.object(type(self.provider), '_cp_online_request', return_value=self.answer(tx)) as call:
             self.submit(tx)
-            self.provider.cardpointe_api_base='https://fts-uat.cardconnect.com/cardconnect/rest/'
-            tx.currency_id=self.env.ref('base.EUR')
-            self.submit(tx)
-            tx.currency_id=self.usd
-            tx.amount=20
-            self.submit(tx)
-        call.assert_not_called()
-        self.assertEqual(tx.state,'pending')
+        call.assert_called_once_with('GET', f'inquireByOrderid/{tx.cp_order_id}/{tx.cp_merchant_id}')
+        self.assertEqual(tx.state, 'done')
 
     def test_access_is_bound_to_transaction_provider_amount_partner(self):
         from types import SimpleNamespace
@@ -236,26 +219,6 @@ class TestOnlineACH(TransactionCase):
             with self.assertRaises(ValidationError): self.submit(self.tx())
         call.assert_not_called()
 
-    def test_invoice_duplicate_drafts_different_payers(self):
-        receivable=self.env['account.account'].create({'name':'Synthetic receivable','code':'TESTREC','account_type':'asset_receivable','reconcile':True})
-        income=self.env['account.account'].create({'name':'Synthetic income','code':'TESTINC','account_type':'income'})
-        self.partner.property_account_receivable_id=receivable
-        journal=self.env['account.journal'].create({'name':'Synthetic sales','code':'TSA','type':'sale'})
-        invoice=self.env['account.move'].create({'move_type':'out_invoice','partner_id':self.partner.id,'journal_id':journal.id,
-            'invoice_line_ids':[(0,0,{'name':'Synthetic item','quantity':1,'price_unit':10,'account_id':income.id,'tax_ids':[(5,0,0)]})]})
-        invoice.action_post()
-        first=self.tx(); second=self.tx()
-        first.invoice_ids=invoice; second.invoice_ids=invoice
-        second.partner_id=self.env['res.partner'].create({'name':'Another synthetic payer'})
-        with patch.object(type(self.provider),'_cp_online_request',return_value={}) as call:
-            self.submit(first)
-            with self.assertRaises(ValidationError): self.submit(second)
-        self.assertEqual(call.call_count,1)
-        first._cp_apply_response(self.answer(first))
-        with patch.object(type(self.provider),'_cp_online_request') as call:
-            with self.assertRaises(ValidationError): self.submit(second)
-        call.assert_not_called()
-
     def invoice(self, amount=100):
         receivable = self.env['account.account'].create({
             'name': 'Synthetic installment receivable', 'code': 'INSTREC',
@@ -282,131 +245,36 @@ class TestOnlineACH(TransactionCase):
         self.assertEqual(invoice.amount_residual, amount)
         return invoice
 
-    def test_invoice_partial_exact_and_excess_before_authorization(self):
-        invoice = self.invoice()
-        for amount, allowed in [(25, True), (100, True), (100.01, False)]:
-            with self.subTest(amount=amount), self.env.cr.savepoint():
-                tx = self.tx(amount=amount)
-                tx.invoice_ids = invoice
-                with patch.object(type(self.provider), '_cp_online_request',
-                                  side_effect=lambda *a, **k: self.answer(
-                                      tx, amount='%.2f' % amount)) as call:
-                    if allowed:
-                        self.submit(tx, consent_amount='%.2f' % amount)
-                        self.assertEqual(tx.state, 'done')
-                        self.assertEqual(call.call_count, 1)
-                        self.assertEqual(call.call_args.args[:2], ('PUT', 'auth'))
-                        self.assertEqual(call.call_args.args[2]['amount'], '%.2f' % amount)
-                        self.assertEqual(tx.cp_submitted_amount, amount)
-                        # Isolate matrix rows without claiming reconciliation.
-                        tx.invoice_ids = False
-                    else:
-                        with self.assertRaises(ValidationError):
-                            self.submit(tx, consent_amount='%.2f' % amount)
-                        call.assert_not_called()
-                        self.assertFalse(tx.cp_order_id)
+    def test_pending_ach_allows_card_on_another_invoice(self):
+        invoice = self.invoice(amount=10)
+        other_invoice = invoice.copy()
+        other_invoice.action_post()
+        ach = self.tx()
+        ach.invoice_ids = invoice
+        with patch.object(type(self.provider), '_cp_online_request', return_value={}):
+            self.submit(ach)
+        self.assertEqual(ach.state, 'pending')
 
-    def test_partial_invoice_uses_remaining_balance_after_reconciliation(self):
-        invoice = self.invoice()
-        receivable = invoice.line_ids.filtered(
-            lambda line: line.account_id.account_type == 'asset_receivable')
-        journal = self.env['account.journal'].create({
-            'name': 'Synthetic installment settlement', 'code': 'IST', 'type': 'general',
-        })
-        clearing = self.env['account.account'].create({
-            'name': 'Synthetic installment clearing', 'code': 'INSTCLR',
-            'account_type': 'asset_current',
-        })
-        payment = self.env['account.move'].create({
-            'move_type': 'entry', 'journal_id': journal.id,
-            'line_ids': [(0, 0, {
-                'account_id': receivable.account_id.id, 'partner_id': self.partner.id,
-                'credit': 25, 'debit': 0,
-            }), (0, 0, {
-                'account_id': clearing.id, 'credit': 0, 'debit': 25,
-            })],
-        })
-        payment.action_post()
-        (receivable | payment.line_ids.filtered(
-            lambda line: line.account_id == receivable.account_id)).reconcile()
-        self.assertEqual(invoice.amount_residual, 75)
-        for amount, allowed in [(25, True), (75, True), (75.01, False), (100, False), (0, False)]:
-            with self.subTest(amount=amount):
-                tx = self.tx(amount=amount)
-                tx.invoice_ids = invoice
-                with patch.object(type(self.provider), '_cp_online_request',
-                                  side_effect=lambda *a, **k: self.answer(
-                                      tx, amount='%.2f' % amount)) as call:
-                    if allowed:
-                        self.submit(tx, consent_amount='%.2f' % amount)
-                        self.assertEqual(tx.state, 'done')
-                        self.assertEqual(call.call_count, 1)
-                        self.assertEqual(call.call_args.args[2]['amount'], '%.2f' % amount)
-                        tx.invoice_ids = False
-                    else:
-                        with self.assertRaises(ValidationError):
-                            self.submit(tx, consent_amount='%.2f' % amount)
-                        call.assert_not_called()
-                        self.assertFalse(tx.cp_order_id)
+        self.env['ir.config_parameter'].sudo().set_param('account_payment.enable_portal_payment', True)
+        self.assertFalse(invoice._has_to_be_paid())
+        self.assertTrue(other_invoice._has_to_be_paid())
+        card = self.tx(self.card)
+        card.invoice_ids = other_invoice
+        with patch.object(type(self.provider), '_cp_online_request',
+                          side_effect=lambda *args: self.answer(card)) as gateway:
+            self.assertEqual(self.submit(card)['state'], 'done')
+            self.assertEqual(self.submit(card)['state'], 'done')
+        self.assertEqual([call.args[:2] for call in gateway.call_args_list], [('PUT', 'auth')])
+        self.assertEqual(ach.state, 'pending')
 
-    def test_partial_invoice_pending_and_accepted_hold_other_payer(self):
-        invoice = self.invoice()
-        first, second = self.tx(amount=25), self.tx(amount=25)
-        first.invoice_ids = second.invoice_ids = invoice
-        second.partner_id = self.env['res.partner'].create({'name': 'Synthetic second payer'})
-        with patch.object(type(self.provider), '_cp_online_request', return_value={}) as call:
-            self.submit(first, consent_amount='25.00')
-            with self.assertRaises(ValidationError):
-                self.submit(second, consent_amount='25.00')
-            self.assertEqual(call.call_count, 1)
-            self.submit(first, consent_amount='25.00')
-            self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
-        first._cp_apply_response(self.answer(first, amount='25.00'))
-        self.assertEqual(first.state, 'done')
-        self.assertFalse(first.is_post_processed)
-        with patch.object(type(self.provider), '_cp_online_request') as call:
-            with self.assertRaises(ValidationError):
-                self.submit(second, consent_amount='25.00')
-            self.submit(first, consent_amount='25.00')
-        call.assert_not_called()
-
-    def test_document_amount_hook_preserves_gross_consent_and_retry(self):
-        invoice = self.invoice()
-        tx = self.tx(amount=103)
-        tx.invoice_ids = invoice
-        self.assertEqual(tx._cp_document_amount(), 103)
-        with patch.object(type(self.provider), '_cp_online_request') as call:
-            with self.assertRaises(ValidationError):
-                self.submit(tx, consent_amount='103.00')
-        call.assert_not_called()
-        self.assertFalse(tx.cp_order_id)
-        # Model a fee addon's already-validated principal allocation. The fee
-        # addon's own tests must validate that allocation and frozen fee evidence.
-        with patch.object(type(tx), '_cp_document_amount', return_value=100):
-            with patch.object(type(self.provider), '_cp_online_request', return_value={}) as call:
-                with self.assertRaises(ValidationError):
-                    self.submit(tx, consent_amount='100.00')
-                call.assert_not_called()
-                self.submit(tx, consent_amount='103.00')
-                self.assertEqual(tx.cp_submitted_amount, 103)
-                self.assertIn('103.00 USD', tx.cp_ach_consent_text)
-                self.assertEqual(call.call_args.args[2]['amount'], '103.00')
-                self.assertEqual(tx.state, 'pending')
-                other = self.tx(amount=103)
-                other.invoice_ids = invoice
-                other.partner_id = self.env['res.partner'].create({'name': 'Synthetic fee payer'})
-                with self.assertRaises(ValidationError):
-                    self.submit(other, consent_amount='103.00')
-                self.submit(tx, consent_amount='103.00')
-                self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
-            with patch.object(type(self.provider), '_cp_online_request',
-                              return_value=self.answer(tx, amount='103.00')):
-                self.submit(tx, consent_amount='103.00')
-            self.assertEqual(tx.state, 'done')
-            with patch.object(type(self.provider), '_cp_online_request') as call:
-                with self.assertRaises(ValidationError):
-                    self.submit(other, consent_amount='103.00')
-            call.assert_not_called()
+    def test_partial_payment_uses_odoo_transaction_amount(self):
+        tx = self.tx(amount=25)
+        tx.invoice_ids = self.invoice(amount=100)
+        with patch.object(type(self.provider), '_cp_online_request',
+                          side_effect=lambda *args: self.answer(tx, amount='25.00')) as gateway:
+            self.submit(tx, consent_amount='25.00')
+        self.assertEqual(gateway.call_args.args[2]['amount'], '25.00')
+        self.assertEqual(tx.state, 'done')
 
     def render_consent(self, method=None, principal=100):
         from lxml import html

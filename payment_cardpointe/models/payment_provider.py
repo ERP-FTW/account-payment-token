@@ -22,7 +22,5 @@ class PaymentProvider(models.Model):
         return urlunsplit((parts.scheme,parts.netloc,parts.path,urlencode(params),''))
 
     def _cp_online_request(self, method, endpoint, payload=None):
-        # Config record is authoritative; do not reuse stale provider credential copies.
         self.ensure_one()
-        self._cardpointe_sync_from_merchant_config()
         return self.with_context(cardpointe_online_private=True)._cardpointe_request(method, endpoint, payload=payload)

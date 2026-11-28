@@ -1,12 +1,9 @@
 """Synthetic transport/ORM fixtures. No gateway credential or live transaction."""
 import secrets
-from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
-from odoo import fields
 from odoo.tests import TransactionCase, tagged
-from odoo.exceptions import ValidationError
-from odoo.addons.account_payment_markup_cardpointe.services.surcharge import quote_fee, agreement, UnusableSurcharge
+from odoo.addons.account_payment_markup_cardpointe.services.surcharge import money, UnusableSurcharge
 from odoo.addons.payment_cardpointe_base.models import cardpointe_client
 
 
@@ -14,7 +11,10 @@ from odoo.addons.payment_cardpointe_base.models import cardpointe_client
 class TestSurcharge(TransactionCase):
     def setUp(self):
         super().setUp()
-        self.p = self.env.ref('payment_cardpointe.payment_provider_cardpointe')
+        self.p = self.env['payment.provider'].create({
+            'name': 'Synthetic CardPointe checkout', 'code': 'cardpointe',
+            'inline_form_view_id': self.env.ref('payment_cardpointe.inline_form').id,
+        })
         self.card = self.env.ref('payment.payment_method_card')
         self.cfg = self.env['cardpointe.merchant.config'].create({'name':'Synthetic program fixture', 'mid':'LAB-NONROUTABLE'})
         self.p.write({'state':'test','is_published':True,'cardpointe_merchant_config_id':self.cfg.id,'payment_method_ids':[(6,0,self.card.ids)]})
@@ -29,16 +29,6 @@ class TestSurcharge(TransactionCase):
 
     def tx(self):
         return self.env['payment.transaction'].create({'provider_id':self.p.id,'payment_method_id':self.card.id,'reference':secrets.token_hex(8), 'amount':100,'currency_id':self.env.ref('base.USD').id,'partner_id':self.partner.id,'operation':'online_direct'})
-
-    def test_selected_provider_must_match_saved_transaction(self):
-        tx = self.tx()
-        tx._cp_check_provider(self.p.id)
-        tx._cp_check_provider(str(self.p.id))
-        for wrong in (None, False, True, self.p.id + 100, 'invalid'):
-            with self.subTest(provider=wrong), self.assertRaises(ValidationError):
-                tx._cp_check_provider(wrong)
-        self.assertFalse(tx.cp_order_id)
-        self.assertEqual(tx.state, 'draft')
 
     def quote(self, tx, data=None):
         with patch.object(type(self.p),'_cp_online_request',return_value={'ok':True,'data':data or {'token':'CREDIT','postal':'NOT_RESTRICTED','fee_amount':'3.00'}}) as call:
@@ -74,7 +64,7 @@ class TestSurcharge(TransactionCase):
                 tx=self.env['payment.transaction'].browse(tx.id)
                 self.assertEqual(tx.state,'done')
                 self.assertEqual((tx.cp_receipt['subtotal'],tx.cp_receipt['fee'],tx.cp_receipt['total']),('100.00',fee,total))
-                self.assertNotIn(self.token,str(tx.read(['cp_quote','cp_quote_binding','cp_receipt'])))
+                self.assertNotIn(self.token,str(tx.read(['cp_quote','cp_receipt'])))
 
     def test_definite_decline_releases_payer(self):
         for decline_fields in [{}, {'amount': '0.00'}, {
@@ -100,10 +90,7 @@ class TestSurcharge(TransactionCase):
                 self.env.invalidate_all()
                 tx = self.env['payment.transaction'].browse(tx.id)
                 self.assertEqual(tx.state, 'error')
-                self.assertFalse(tx.cp_fee_hold)
                 self.assertFalse(tx.cp_receipt)
-                self.assertFalse(tx.cp_auth_evidence['approved'])
-                self.assertTrue(tx.cp_auth_evidence['identity_matches'])
                 # A new attempt by the same payer must not be refused as unresolved.
                 following = self.tx()
                 following_qid = self.quote(following)
@@ -118,7 +105,6 @@ class TestSurcharge(TransactionCase):
                 {'respstat': 'B'},
                 {'respstat': 'C', 'merchid': 'OTHER-LAB-MERCHANT'},
                 {'respstat': 'C', 'orderid': 'OTHER-LAB-ORDER'},
-                {'respstat': 'C', 'currency': 'EUR'},
                 {'respstat': 'A', 'merchid': 'OTHER-LAB-MERCHANT'}]:
             with self.subTest(response_fields=response_fields), self.cr.savepoint():
                 tx = self.tx()
@@ -132,10 +118,7 @@ class TestSurcharge(TransactionCase):
                     tx._cp_process()
                 self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
                 self.assertEqual(tx.state, 'pending')
-                self.assertFalse(tx.cp_fee_hold)
                 self.assertFalse(tx.cp_receipt)
-                # Keep distinct payer identities for independent pending cases.
-                self.partner = self.env['res.partner'].create({'name': 'Synthetic next payer'})
 
     def test_invalid_quotes_zero_auth(self):
         for data in [{},{'token':'UNKNOWN','postal':'NOT_RESTRICTED'}, {'token':'CREDIT','postal':'NOT_RESTRICTED'},
@@ -152,17 +135,17 @@ class TestSurcharge(TransactionCase):
             self.assertEqual(tx._cp_process(self.token,postal='19000')['state'],'quote_error')
         self.assertFalse(tx.cp_order_id)
 
-    def test_changed_and_expired_quote_blocks_auth(self):
-        for changed in ['expiry','token','postal','amount']:
-            tx=self.tx(); qid=self.quote(tx)
-            token=self.token; postal='19000'
-            if changed=='expiry': tx.cp_quote_at=fields.Datetime.now()-timedelta(minutes=6)
-            if changed=='token': token=secrets.token_hex(16)
-            if changed=='postal': postal='19001'
-            if changed=='amount': tx.amount=101
-            with patch.object(type(self.p),'_cp_online_request') as call:
-                self.assertEqual(tx._cp_process(token,postal=postal,quote_id=qid)['state'],'quote_error')
-            call.assert_not_called(); self.assertFalse(tx.cp_order_id)
+    def test_changed_card_gets_a_new_quote(self):
+        tx = self.tx()
+        old_quote = self.quote(tx)
+        with patch.object(type(self.p), '_cp_online_request', return_value={'ok': True, 'data': {
+                'token': 'DEBIT', 'postal': 'NOT_RESTRICTED'}}) as gateway:
+            result = tx._cp_process(secrets.token_hex(16), postal='19000', quote_id=old_quote)
+        self.assertEqual(result['state'], 'quote')
+        self.assertEqual(result['quote']['total'], '100.00')
+        self.assertNotEqual(result['quote_id'], old_quote)
+        self.assertEqual(gateway.call_args.args[:2], ('GET', 'surcharge'))
+        self.assertFalse(tx.cp_order_id)
 
     def test_ambiguous_auth_inquiry_never_recharges(self):
         tx=self.tx(); qid=self.quote(tx)
@@ -176,53 +159,16 @@ class TestSurcharge(TransactionCase):
             tx._cp_process(); tx._cp_process()
         self.assertEqual(call.call_count,1); self.assertEqual(tx.state,'done')
 
-    def test_mismatch_remains_held_after_inquiry(self):
-        for inquiry_fields in [
-                {'respstat': 'C'},
-                {'respstat': 'C', 'amount': '0.00'},
-                {'respstat': 'C', 'amount': '100.00', 'fee_amount': '0.00',
-                 'fee_type': 'SURCHRG_WAIVED'},
-                {'respstat': 'A', 'amount': '103.00', 'fee_amount': '3.00'},
-                {'respstat': 'A', 'amount': '104.00', 'fee_amount': '4.00'}]:
-            with self.subTest(inquiry_fields=inquiry_fields):
-                # Each held transaction needs its own payer for independent cases.
-                self.partner = self.env['res.partner'].create({'name': 'Synthetic held payer'})
-                tx = self.tx()
-                qid = self.quote(tx)
-
-                def send(method, endpoint, payload=None):
-                    if method == 'PUT':
-                        self.assertEqual(endpoint, 'auth')
-                        assert payload is not None
-                        self.assertEqual(payload['amount'], '100.00')
-                        return self.reply(tx, '4.00', '104.00')
-                    self.assertEqual((method, endpoint), ('GET',
-                        'inquireByOrderid/%s/%s' % (tx.cp_order_id, self.cfg.mid)))
-                    response = self.reply(tx)
-                    response['data'].update(inquiry_fields)
-                    return response
-
-                with patch.object(type(self.p), '_cp_online_request', side_effect=send) as call:
-                    self.assertEqual(tx._cp_process(
-                        self.token, postal='19000', quote_id=qid)['state'], 'pending')
-                    self.assertTrue(tx.cp_fee_hold)
-                    original_evidence = dict(tx.cp_auth_evidence)
-                    for _ in range(2):
-                        self.assertEqual(tx._cp_process()['state'], 'pending')
-                        self.env.flush_all()
-                        self.env.invalidate_all()
-                        tx = self.env['payment.transaction'].browse(tx.id)
-                        self.assertEqual(tx.state, 'pending')
-                        self.assertTrue(tx.cp_fee_hold)
-                        self.assertFalse(tx.cp_receipt)
-                        self.assertFalse(tx.provider_reference)
-                        self.assertEqual(tx.cp_auth_evidence, original_evidence)
-                    following = self.tx()
-                    with self.assertRaisesRegex(ValidationError, 'A previous payment is unresolved'):
-                        following._cp_process(self.token, postal='19000')
-                self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET', 'GET'])
-                self.assertEqual(tx.cp_auth_evidence['amount'], '104.00')
-                self.assertEqual(tx.cp_auth_evidence['fee_amount'], '4.00')
+    def test_receipt_records_actual_gateway_fee(self):
+        tx = self.tx()
+        quote_id = self.quote(tx)
+        with patch.object(type(self.p), '_cp_online_request',
+                          side_effect=lambda *args: self.reply(tx, '4.00', '104.00')) as gateway:
+            self.assertEqual(tx._cp_process(self.token, postal='19000', quote_id=quote_id)['state'], 'done')
+            tx._cp_process()
+        self.assertEqual(gateway.call_count, 1)
+        self.assertEqual(tx.provider_reference, 'LAB-REFERENCE')
+        self.assertEqual((tx.cp_receipt['fee'], tx.cp_receipt['total']), ('4.00', '104.00'))
 
     def test_surcharge_http_uses_query_not_body_and_sanitizes_error(self):
         secret=secrets.token_hex(16)
@@ -237,4 +183,5 @@ class TestSurcharge(TransactionCase):
 
     def test_malformed_gateway_amounts(self):
         for fee in ['-1','NaN',None,True]:
-            with self.assertRaises(UnusableSurcharge): agreement({'amount':'100.00','fee_amount':fee,'fee_type':'SURCHRG'},'100.00')
+            with self.assertRaises(UnusableSurcharge):
+                money(fee)

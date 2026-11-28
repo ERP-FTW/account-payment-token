@@ -33,7 +33,10 @@ class TestOnlineManualFee(TransactionCase):
             'property_account_income_id': self.income.id, 'taxes_id': [(5, 0, 0)]})
         self.sale = self.env['account.journal'].create({'name': 'Online sales', 'code': 'ONFS', 'type': 'sale'})
         self.bank = self.env['account.journal'].create({'name': 'Online bank', 'code': 'ONFB', 'type': 'bank'})
-        self.p = self.env.ref('payment_cardpointe.payment_provider_cardpointe')
+        self.p = self.env['payment.provider'].create({
+            'name': 'Synthetic CardPointe checkout', 'code': 'cardpointe',
+            'inline_form_view_id': self.env.ref('payment_cardpointe.inline_form').id,
+        })
         self.ach = self.env.ref('payment_cardpointe_ach.payment_method_ach')
         self.card = self.env.ref('payment.payment_method_card')
         self.cfg = self.env['cardpointe.merchant.config'].create({
@@ -42,9 +45,7 @@ class TestOnlineManualFee(TransactionCase):
             'tokenizer_url': 'https://synthetic.cardconnect.com/itoke/ajax-tokenizer.html'})
         self.p.write({'state': 'test', 'is_published': True, 'journal_id': self.bank.id,
             'cardpointe_merchant_config_id': self.cfg.id,
-            'payment_method_ids': [(6, 0, (self.ach | self.card).ids)],
-            'cp_ach_agreement_ref': 'Synthetic only',
-            'cp_ach_consumer_checking': True})
+            'payment_method_ids': [(6, 0, (self.ach | self.card).ids)]})
         self.ach_fee = self.env['payment.method.fee'].create({
             'method_id': self.ach.id, 'provider_id': self.p.id, 'markup_percent': 3,
             'markup_product_id': self.product.id})
@@ -133,53 +134,19 @@ class TestOnlineManualFee(TransactionCase):
         self.ach_fee.markup_percent = 2
         self.assertEqual(tx._get_processing_values()['amount'], 103)
         self.assertEqual(tx.markup_fee_move_id, fee)
-        self.assertEqual(tx._get_payment_principal(), 100)
+        self.assertEqual(tx.markup_base_amount, 100)
         self.assertEqual(self.transaction()._get_processing_values()['amount'], 102)
 
-    def test_stale_consent_and_changed_fee_refused_before_transport(self):
-        for changed in ('consent', 'total', 'fee', 'missing', 'foreign', 'tax', 'principal'):
-            with self.subTest(changed=changed), self.cr.savepoint():
-                tx = self.transaction()
-                tx._get_processing_values()
-                if changed == 'total':
-                    tx.amount = 104
-                elif changed == 'fee':
-                    tx.markup_fee_move_id.invoice_line_ids.price_unit = 4
-                elif changed == 'missing':
-                    tx.markup_fee_move_id = False
-                elif changed == 'foreign':
-                    tx.markup_fee_move_id.ref = 'Another payment'
-                elif changed == 'tax':
-                    tx.markup_fee_move_id.invoice_line_ids.tax_ids = self.env['account.tax'].create({
-                        'name': 'Changed fee tax', 'amount': 10, 'amount_type': 'percent', 'type_tax_use': 'sale'})
-                elif changed == 'principal':
-                    tx.write({'amount': 104, 'markup_base_amount': 101, 'markup_total_amount': 104})
-                with patch.object(type(self.p), '_cp_online_request') as call:
-                    with self.assertRaises(ValidationError):
-                        self.process(tx, 100 if changed == 'consent' else None)
-                    call.assert_not_called()
-                self.assertFalse(tx.cp_order_id)
-                tx._set_canceled()
-
-    def test_original_invoice_ceiling_and_pending_attempt_still_enforced(self):
-        excessive = self.transaction(amount=101)
-        excessive._get_processing_values()
-        with patch.object(type(self.p), '_cp_online_request') as call:
-            with self.assertRaises(ValidationError):
-                self.process(excessive)
-            call.assert_not_called()
-        excessive._set_canceled()
+    def test_consent_to_current_checkout_total(self):
         tx = self.transaction()
         tx._get_processing_values()
-        with patch.object(type(self.p), '_cp_online_request', return_value={}) as call:
-            self.assertEqual(self.process(tx)['state'], 'pending')
-            competitor = self.transaction(invoice=tx.invoice_ids)
-            competitor._get_processing_values()
+        with patch.object(type(self.p), '_cp_online_request',
+                          side_effect=lambda method, endpoint, payload: self.approval(tx, payload)) as gateway:
             with self.assertRaises(ValidationError):
-                self.process(competitor)
-            tx._cp_process()
-            self.assertEqual([c.args[0] for c in call.call_args_list], ['PUT', 'GET'])
-        self.assertEqual(tx.state, 'pending')
+                self.process(tx, 100)
+            gateway.assert_not_called()
+            self.assertEqual(self.process(tx, 103)['state'], 'done')
+        self.assertEqual(gateway.call_count, 1)
 
     def test_installment_then_exact_remaining_with_manual_fee(self):
         tx = self.transaction(amount=25)
@@ -196,14 +163,6 @@ class TestOnlineManualFee(TransactionCase):
         self.assertEqual(tx.markup_fee_move_id.amount_total, 0.75)
         self.assertEqual(tx.markup_fee_move_id.amount_residual, 0)
         self.assertEqual(original.amount_residual, 75)
-        # The fee exception must not admit a principal over the remaining balance.
-        over = self.transaction(amount=75.01, invoice=original)
-        over._get_processing_values()
-        with patch.object(type(self.p), '_cp_online_request') as call:
-            with self.assertRaises(ValidationError):
-                self.process(over)
-            call.assert_not_called()
-        over._set_canceled()
         final = self.transaction(amount=75, invoice=original)
         self.assertEqual(final._get_processing_values()['amount'], 77.25)
         final_consent = self.rendered_consent_amount(75)

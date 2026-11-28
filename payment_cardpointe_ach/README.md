@@ -1,5 +1,5 @@
 # CardPointe one-time ACH for Odoo 19
 
-Install this addon and select **Bank account (ACH)** on the CardPointe provider. Enable the account types assigned to the merchant. The hosted form uses the provider’s tokenizer URL in bank-account mode. Checking and savings are supported. Business CCD submissions also require the configured merchant and payer agreement references.
+Select **Bank account (ACH)** on the CardPointe provider and use a merchant account enabled for eCheck. The hosted form uses the configured tokenizer URL in bank-account mode. At checkout the payer chooses consumer or business checking or savings and authorizes the displayed one-time USD total.
 
-The payer authorizes the displayed one-time USD total. A matched approval confirms submission, a matched decline leaves the payment in error, and an unknown result is inquired using the original order reference. Bank funding is confirmed separately.
+Odoo records the gateway response on the payment transaction. If the result is unknown, a repeat request looks up the original gateway order. Gateway approval confirms submission. Bank funding is a separate step.

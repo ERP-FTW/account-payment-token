@@ -25,22 +25,6 @@ class PaymentTransaction(models.Model):
     markup_refund_pending_amount = fields.Monetary(copy=False, currency_field='currency_id')
     markup_refund_source_id = fields.Many2one('payment.transaction', copy=False, ondelete='set null')
 
-    def _get_payment_principal(self):
-        self.ensure_one()
-        if not self.markup_amount:
-            return self.amount
-        currency = self.currency_id
-        if currency.compare_amounts(self.amount, self.markup_base_amount + self.markup_amount):
-            raise ValidationError('The disclosed payment amount changed. Restart checkout.')
-        if self.invoice_ids:
-            fee = self.markup_fee_move_id
-            if (not fee or fee.state != 'draft' or fee.ref != 'Payment markup %s' % self.reference
-                    or fee.company_id != self.company_id or fee.currency_id != currency
-                    or fee.commercial_partner_id != self.partner_id.commercial_partner_id
-                    or currency.compare_amounts(fee.amount_total, self.markup_amount)):
-                raise ValidationError('The disclosed fee has changed. Restart checkout.')
-        return self.markup_base_amount
-
     def _markup_fee(self):
         if not self.payment_method_id:
             return self.env['payment.method.fee']
@@ -60,14 +44,6 @@ class PaymentTransaction(models.Model):
             self.write({'markup_fee_move_id': False, 'markup_invoice_line_id': False})
         invoices = self.invoice_ids
         invoice = invoices[:1]
-        provider_company = self.provider_id.company_id
-        if invoice and (not invoice.partner_id or invoice.company_id != provider_company or
-                invoice.commercial_partner_id != self.partner_id.commercial_partner_id or
-                invoice.currency_id != self.currency_id or any(
-                    inv.company_id != invoice.company_id or
-                    inv.currency_id != invoice.currency_id or
-                    inv.partner_id != invoice.partner_id for inv in invoices)):
-            return False
         product = self._markup_fee().markup_product_id
         account = product.property_account_income_id or product.categ_id.property_account_income_categ_id
         if not account:

@@ -25,11 +25,8 @@ class PaymentTransaction(models.Model):
             matches = False
         if not matches:
             raise ValidationError('The payment amount changed. Review and authorize the current total.')
-        if account_class not in dict(self.provider_id._cp_ach_options()):
-            raise ValidationError('This bank account and entry-code combination is not enabled for this merchant.')
+        if account_class not in ACCOUNT_CLASSES:
+            raise ValidationError('Select the bank account type.')
         _, accttype, entry = ACCOUNT_CLASSES[account_class]
-        company = self.partner_id.commercial_partner_id
-        if entry == 'CCD' and (not company.is_company or not company.cp_ach_ccd_agreement_ref):
-            raise ValidationError('A signed ACH company agreement for this business payer is required.')
         self.write({'cp_ach_consent_text': self.provider_id._cp_ach_consent(self.amount,self.currency_id), 'cp_ach_consent_version': CONSENT_VERSION, 'cp_ach_consent_at': fields.Datetime.now(), 'cp_ach_account_class': account_class, 'cp_ach_entry_code': entry})
         return None, {'accttype':accttype, 'achEntryCode':entry, 'name':self.partner_name[:30], **({'achDescription':'PURCHASE'} if entry=='WEB' else {})}

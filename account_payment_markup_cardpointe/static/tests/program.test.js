@@ -14,7 +14,7 @@ for (const fee of ['3.00', '0.00']) {
         const frame=el.querySelector('iframe');
         const calls=[];
         const ctx={__proto__: PaymentForm.prototype, el, paymentContext:{transactionRoute:'/synthetic/transaction',partnerId:1,amount:100,currencyId:1},
-            _getInlineForm:()=>el, _prepareTransactionRouteParams:()=>({}),
+            waitFor: promise => promise, _getInlineForm:()=>el, _prepareTransactionRouteParams:()=>({}),
             _cpTokens:new Map([[frame,'SYNTHETICNOTROUTABLE']]),
             _enableButton:()=>{}, _displayErrorDialog:()=>{}};
         sessionStorage.clear();

@@ -17,7 +17,7 @@ export function trustedToken(event, iframe) {
 
 patch(PaymentForm.prototype, {
     async _prepareInlineForm(providerId, providerCode, paymentOptionId, paymentMethodCode, flow) {
-        if (providerCode !== 'cardpointe') return super._prepareInlineForm(...arguments);
+        if (providerCode !== 'cardpointe' || flow === 'token') return super._prepareInlineForm(...arguments);
         this._setPaymentFlow('direct');
         if (!this._cpListener) {
             this._cpTokens = new Map();
@@ -41,40 +41,39 @@ patch(PaymentForm.prototype, {
     _cpFormError(form, retry) { return null; },
     _cpFormValues(form) { return {}; },
     _cpHandleResult(form, result) { return false; },
-    async _initiatePaymentFlow(providerCode, paymentOptionId, paymentMethodCode, flow) {
-        if (providerCode !== 'cardpointe') return super._initiatePaymentFlow(...arguments);
+    _cpSelectedForm() {
         const radio = this.el.querySelector('input[name="o_payment_radio"]:checked');
-        const form = this._getInlineForm(radio).querySelector('.o_cp_form');
-        const iframe = form.querySelector('iframe');
-        // Persist only the Odoo processing identity, NEVER the hosted token. A lost
-        // response/reload therefore inquires the same gateway order, not a new debit.
-        const key = 'cp-checkout:' + JSON.stringify([this.paymentContext.transactionRoute, this.paymentContext.partnerId, this.paymentContext.amount, this.paymentContext.currencyId, this.paymentContext.providerId, paymentOptionId, paymentMethodCode]);
-        let values;
+        return this._getInlineForm(radio).querySelector('.o_cp_form');
+    },
+    async _initiatePaymentFlow(providerCode, paymentOptionId, paymentMethodCode, flow) {
+        if (providerCode !== 'cardpointe' || flow !== 'direct') {
+            return super._initiatePaymentFlow(...arguments);
+        }
+        const form = this._cpSelectedForm();
+        const attempt = this._cpAttempts?.get(form);
+        const error = this._cpFormError(form, Boolean(attempt))
+            || (!attempt && !this._cpTokens?.get(form.querySelector('iframe'))
+                && _t('Complete the secure Fiserv form before paying.'));
+        if (error) {
+            this._displayErrorDialog(_t('Check payment details'), error);
+            this._enableButton();
+            return;
+        }
+        if (attempt) {
+            return this._processDirectFlow(providerCode, paymentOptionId, paymentMethodCode, attempt);
+        }
+        return super._initiatePaymentFlow(...arguments);
+    },
+    async _processDirectFlow(providerCode, paymentOptionId, paymentMethodCode, values) {
+        if (providerCode !== 'cardpointe') return super._processDirectFlow(...arguments);
+        const form = this._cpSelectedForm();
+        // A quote or lost reply can be retried on this form using the same Odoo transaction.
+        this._cpAttempts ??= new WeakMap();
+        this._cpAttempts.set(form, {reference: values.reference, access_token: values.access_token});
         try {
-            const saved = sessionStorage.getItem(key);
-            const error = this._cpFormError(form, Boolean(saved));
-            if (error) {
-                this._displayErrorDialog(_t('Check payment details'), error);
-                this._enableButton();
-                return;
-            }
-            if (saved) {
-                values = JSON.parse(saved);
-            } else {
-                const token = this._cpTokens?.get(iframe);
-                if (!token) {
-                    this._displayErrorDialog(_t('Secure form incomplete'), _t('Complete the secure Fiserv form and wait for tokenization before paying.'));
-                    this._enableButton();
-                    return;
-                }
-                values = await rpc(this.paymentContext.transactionRoute, this._prepareTransactionRouteParams());
-                sessionStorage.setItem(key, JSON.stringify({reference:values.reference, access_token:values.access_token}));
-            }
             const result = await rpc('/payment/cardpointe/process', {
                 reference: values.reference, access_token: values.access_token,
-                payment_method_code: paymentMethodCode,
-                provider_id: this.paymentContext.providerId,
-                token: this._cpTokens?.get(iframe) || null,
+                token: this._cpTokens?.get(form.querySelector('iframe')) || null,
                 ...this._cpFormValues(form),
             });
             if (this._cpHandleResult(form, result)) {
@@ -82,11 +81,15 @@ patch(PaymentForm.prototype, {
                 return;
             }
             this._cpTokens?.clear();
-            if (['done', 'authorized', 'error', 'cancel'].includes(result.state)) sessionStorage.removeItem(key);
+            if (['done', 'authorized', 'error', 'cancel'].includes(result.state)) {
+                this._cpAttempts.delete(form);
+            }
             window.location = result.redirect_url || '/payment/status';
-        } catch {
+        } catch (error) {
             this._cpTokens?.clear();
-            this._displayErrorDialog(_t('Payment not confirmed'), _t('Do not start another payment. Retry here to inquire using the original reference, or contact the merchant.'));
+            const reason = error?.data?.name === 'odoo.exceptions.ValidationError' && error.data.message;
+            this._displayErrorDialog(_t('Payment not confirmed'),
+                reason || _t('Retry here to check the payment using its original reference.'));
             this._enableButton();
         }
     },
